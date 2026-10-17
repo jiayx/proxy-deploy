@@ -47,6 +47,8 @@ func TestGenerate(t *testing.T) {
 		`"udp/:8443"`,
 		`https://{http.request.host}:8443{http.request.uri}`,
 		`"fallback_sni": "a.com"`,
+		`"proxy_protocol": "v2"`,
+		`"wrapper": "proxy_protocol"`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("generated config lacks %s", want)

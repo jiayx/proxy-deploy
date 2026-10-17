@@ -164,9 +164,10 @@ func layer4App(s Spec) obj {
 				},
 			})
 		}
-		// 其余流量（网站、未知 SNI、ACME TLS-ALPN 验证）原样交给内部网站
+		// 其余流量（网站、未知 SNI、ACME TLS-ALPN 验证）原样交给内部网站，
+		// 用 PROXY protocol 带上客户端真实地址
 		routes = append(routes, obj{
-			"handle": []obj{{"handler": "proxy", "upstreams": []obj{{"dial": []string{s.SiteAddr}}}}},
+			"handle": []obj{{"handler": "proxy", "proxy_protocol": "v2", "upstreams": []obj{{"dial": []string{s.SiteAddr}}}}},
 		})
 		servers[fmt.Sprintf("tcp_%d", srv.Port)] = obj{
 			"listen": []string{fmt.Sprintf(":%d", srv.Port)},
@@ -224,9 +225,15 @@ func httpApp(s Spec) obj {
 			"listen":          []string{s.SiteAddr},
 			"protocols":       []string{"h1", "h2"},
 			"automatic_https": obj{"disable": true},
+			// 先解析 l4 入口加上的 PROXY protocol 头再做 TLS，网站和反代后端看到的是客户端真实地址
+			"listener_wrappers": []obj{
+				{"wrapper": "proxy_protocol", "allow": []string{"127.0.0.1/32"}},
+				{"wrapper": "tls"},
+			},
 			// 存在连接策略即启用 TLS；不带 SNI 的连接使用 DefaultSNI 的证书
 			"tls_connection_policies": []obj{{"fallback_sni": s.DefaultSNI}},
 			"routes":                  routes,
+			"logs":                    obj{}, // 访问日志（含客户端真实地址）写入 Caddy 的 journal
 		},
 		"site_plain": obj{
 			"listen":          []string{s.SitePlainAddr},

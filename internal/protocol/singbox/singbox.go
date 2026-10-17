@@ -64,8 +64,8 @@ func Config(listenAddr string, inbound map[string]any) ([]byte, error) {
 	inbound["listen"] = host
 	inbound["listen_port"] = port
 	cfg := map[string]any{
-		// journald 已带时间戳
-		"log":       map[string]any{"level": "info", "timestamp": false},
+		// journald 已带时间戳，也不需要终端颜色
+		"log":       map[string]any{"level": "info", "timestamp": false, "disable_color": true},
 		"inbounds":  []any{inbound},
 		"outbounds": []any{map[string]any{"type": "direct", "tag": "direct"}},
 	}

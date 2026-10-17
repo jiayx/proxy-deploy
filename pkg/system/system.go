@@ -136,7 +136,7 @@ func fetch(ctx context.Context, url, wantSum string) ([]byte, error) {
 }
 
 // InstallVersioned 把二进制保存为带版本号的 versioned 文件（已存在则复用），
-// 再把 link 原子地指向它。旧版本文件保留，便于回滚。
+// 再把 link 原子地指向它。不再使用的版本由 PruneBinaries 清理。
 func InstallVersioned(versioned, link string, fetch func(dest string) error) error {
 	if _, err := os.Stat(versioned); err != nil {
 		if err := fetch(versioned); err != nil {
@@ -153,6 +153,60 @@ func InstallVersioned(versioned, link string, fetch func(dest string) error) err
 		return err
 	}
 	return os.Rename(tmp, link)
+}
+
+// PruneBinaries 删除 binDir 下不在 keep 中的文件和链接，以及 binDir/versions 下
+// 没有被保留的链接指向的版本文件，返回删除的路径（相对 binDir）。
+func PruneBinaries(binDir string, keep []string) ([]string, error) {
+	kept := map[string]bool{}
+	for _, k := range keep {
+		kept[filepath.Clean(k)] = true
+	}
+	entries, err := os.ReadDir(binDir)
+	if err != nil {
+		return nil, err
+	}
+	var removed []string
+	targets := map[string]bool{}
+	for _, e := range entries {
+		path := filepath.Join(binDir, e.Name())
+		if e.IsDir() {
+			continue
+		}
+		if !kept[path] {
+			if err := os.Remove(path); err != nil {
+				return removed, err
+			}
+			removed = append(removed, e.Name())
+			continue
+		}
+		if target, err := os.Readlink(path); err == nil {
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(binDir, target)
+			}
+			targets[filepath.Clean(target)] = true
+		}
+	}
+
+	versionsDir := filepath.Join(binDir, "versions")
+	versions, err := os.ReadDir(versionsDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return removed, nil
+	}
+	if err != nil {
+		return removed, err
+	}
+	for _, v := range versions {
+		path := filepath.Join(versionsDir, v.Name())
+		if targets[path] {
+			continue
+		}
+		if err := os.RemoveAll(path); err != nil {
+			return removed, err
+		}
+		removed = append(removed, filepath.Join("versions", v.Name()))
+	}
+	return removed, nil
 }
 
 // CopyFile 把 src 复制到 dest（覆盖）。

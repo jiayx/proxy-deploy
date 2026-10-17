@@ -49,6 +49,7 @@ func (o *Orchestrator) Deploy(ctx context.Context, p *Plan, caddyBinary string, 
 	}
 
 	units := []unitFile{o.caddyUnit()}
+	usedBins := []string{o.layout.CaddyBin()}
 	m := &Manifest{Prefix: o.layout.Prefix, User: o.layout.User, Services: []string{caddyUnit}, Ports: p.Ports}
 	for _, c := range p.Certs {
 		m.Certs = append(m.Certs, CertFile{c.Name, c.CertPath})
@@ -68,6 +69,7 @@ func (o *Orchestrator) Deploy(ctx context.Context, p *Plan, caddyBinary string, 
 			return fmt.Errorf("%s service: %w", s.Cfg.Name, err)
 		}
 		units = append(units, o.serviceUnit(s, svc))
+		usedBins = append(usedBins, svc.Args[0])
 		m.Services = append(m.Services, s.Unit)
 	}
 	for _, u := range units {
@@ -147,6 +149,15 @@ func (o *Orchestrator) Deploy(ctx context.Context, p *Plan, caddyBinary string, 
 			return o.withJournal(ctx, u, fmt.Errorf("%s 状态为 %s", u, state))
 		}
 	}
+	// 部署成功后再清理，失败时保留旧程序
+	removed, err := system.PruneBinaries(o.layout.BinDir(), usedBins)
+	for _, r := range removed {
+		logf("清理不再使用的 %s", r)
+	}
+	if err != nil {
+		return fmt.Errorf("清理旧程序: %w", err)
+	}
+
 	if o.layout.User && !o.Lingering(ctx) {
 		logf("警告：当前用户未开启 linger，注销后服务会被停止、开机后也不会自动启动。请执行：sudo loginctl enable-linger %s", currentUser())
 	}

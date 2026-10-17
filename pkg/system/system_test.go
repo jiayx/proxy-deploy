@@ -90,3 +90,38 @@ func TestExtractTarGz(t *testing.T) {
 		t.Fatal("missing entry should fail")
 	}
 }
+
+func TestPruneBinaries(t *testing.T) {
+	bin := t.TempDir()
+	write := func(rel string) {
+		if err := WriteFile(filepath.Join(bin, rel), []byte("x"), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := func(name, target string) {
+		if err := os.Symlink(target, filepath.Join(bin, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("caddy")
+	write("versions/sing-box-1.14.3")
+	write("versions/sing-box-1.13.0")
+	write("versions/anytls-0.0.13")
+	link("sing-box", "versions/sing-box-1.14.3")
+	link("anytls", "versions/anytls-0.0.13")
+	write("sing-box.tmp")
+
+	removed, err := PruneBinaries(bin, []string{filepath.Join(bin, "caddy"), filepath.Join(bin, "sing-box")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "anytls,sing-box.tmp,versions/anytls-0.0.13,versions/sing-box-1.13.0"
+	if got := strings.Join(removed, ","); got != want {
+		t.Fatalf("removed:\n got %s\nwant %s", got, want)
+	}
+	for _, rel := range []string{"caddy", "sing-box", "versions/sing-box-1.14.3"} {
+		if _, err := os.Stat(filepath.Join(bin, rel)); err != nil {
+			t.Fatalf("%s should be kept: %v", rel, err)
+		}
+	}
+}
