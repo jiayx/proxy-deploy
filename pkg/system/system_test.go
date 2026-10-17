@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -123,5 +124,33 @@ func TestPruneBinaries(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(bin, rel)); err != nil {
 			t.Fatalf("%s should be kept: %v", rel, err)
 		}
+	}
+}
+
+func TestWriteFileChecked(t *testing.T) {
+	dest := filepath.Join(t.TempDir(), "config.json")
+	if err := WriteFile(dest, []byte("old"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var checked string
+	reject := func(path string) error { checked = path; return errors.New("bad") }
+	if err := WriteFileChecked(dest, []byte("new"), 0600, reject); err == nil {
+		t.Fatal("check failure should be returned")
+	}
+	if filepath.Base(checked) != "config.check.json" {
+		t.Fatalf("temp file should keep the extension, got %s", checked)
+	}
+	if data, _ := os.ReadFile(dest); string(data) != "old" {
+		t.Fatalf("dest must stay unchanged on failure, got %q", data)
+	}
+	if _, err := os.Stat(checked); !os.IsNotExist(err) {
+		t.Fatal("temp file should be removed on failure")
+	}
+
+	if err := WriteFileChecked(dest, []byte("new"), 0600, func(string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(dest); string(data) != "new" {
+		t.Fatalf("dest should be replaced, got %q", data)
 	}
 }

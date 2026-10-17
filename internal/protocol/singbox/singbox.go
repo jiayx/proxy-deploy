@@ -9,8 +9,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"os/exec"
 	"runtime"
 	"strconv"
+	"strings"
 
 	"github.com/jiayx/proxy-deploy/pkg/paths"
 	"github.com/jiayx/proxy-deploy/pkg/system"
@@ -42,9 +44,18 @@ func Install(ctx context.Context, layout *paths.Layout) error {
 		func(dest string) error { return system.DownloadAndExtract(ctx, u, sum, binName, dest, 0755) })
 }
 
-// Args 返回运行 sing-box 的命令行
+// Args 返回运行 sing-box 的命令行；日志写入 journald，关闭终端颜色
 func Args(layout *paths.Layout, configPath string) []string {
-	return []string{Bin(layout), "run", "-c", configPath}
+	return []string{Bin(layout), "run", "--disable-color", "-c", configPath}
+}
+
+// Check 用 sing-box check 校验配置文件
+func Check(ctx context.Context, layout *paths.Layout, configPath string) error {
+	out, err := exec.CommandContext(ctx, Bin(layout), "check", "--disable-color", "-c", configPath).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("sing-box check %s: %s", configPath, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // Config 生成只包含一个 inbound 的 sing-box 配置。
@@ -64,8 +75,8 @@ func Config(listenAddr string, inbound map[string]any) ([]byte, error) {
 	inbound["listen"] = host
 	inbound["listen_port"] = port
 	cfg := map[string]any{
-		// journald 已带时间戳，也不需要终端颜色
-		"log":       map[string]any{"level": "info", "timestamp": false, "disable_color": true},
+		// journald 已带时间戳
+		"log":       map[string]any{"level": "info", "timestamp": false},
 		"inbounds":  []any{inbound},
 		"outbounds": []any{map[string]any{"type": "direct", "tag": "direct"}},
 	}

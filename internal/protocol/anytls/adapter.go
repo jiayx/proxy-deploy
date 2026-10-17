@@ -68,6 +68,10 @@ func paddingScheme(cfg *config.ProtocolConfig) ([]string, error) {
 
 func (a *Adapter) Install(ctx context.Context) error { return singbox.Install(ctx, a.layout) }
 
+func (a *Adapter) CheckConfig(ctx context.Context, path string) error {
+	return singbox.Check(ctx, a.layout, path)
+}
+
 func (a *Adapter) GenerateConfig(cfg *config.ProtocolConfig, rt protocol.Runtime) ([]byte, error) {
 	inbound := map[string]any{
 		"type":  "anytls",

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jiayx/proxy-deploy/internal/entry/caddy"
+	"github.com/jiayx/proxy-deploy/internal/protocol"
 	"github.com/jiayx/proxy-deploy/pkg/system"
 )
 
@@ -60,8 +61,12 @@ func (o *Orchestrator) Deploy(ctx context.Context, p *Plan, caddyBinary string, 
 			return fmt.Errorf("%s config: %w", s.Cfg.Name, err)
 		}
 		if data != nil {
-			if err := system.WriteFile(s.Adapter.ConfigPath(), data, 0600); err != nil {
-				return err
+			check := func(string) error { return nil }
+			if c, ok := s.Adapter.(protocol.ConfigChecker); ok {
+				check = func(path string) error { return c.CheckConfig(ctx, path) }
+			}
+			if err := system.WriteFileChecked(s.Adapter.ConfigPath(), data, 0600, check); err != nil {
+				return fmt.Errorf("%s config: %w", s.Cfg.Name, err)
 			}
 		}
 		svc, err := s.Adapter.Service(s.Cfg, s.Runtime)
@@ -216,15 +221,14 @@ func (o *Orchestrator) writeCaddyConfig(ctx context.Context, p *Plan) error {
 		return err
 	}
 	// 配置里可能包含 DNS API 凭据
-	if err := system.WriteFile(o.layout.CaddyConfig(), data, 0600); err != nil {
-		return err
-	}
-	cmd := exec.CommandContext(ctx, o.layout.CaddyBin(), "validate", "--config", o.layout.CaddyConfig())
-	cmd.Env = append(os.Environ(), o.caddyEnv()...)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("caddy validate: %s: %w", lastLines(string(out), 10), err)
-	}
-	return nil
+	return system.WriteFileChecked(o.layout.CaddyConfig(), data, 0600, func(path string) error {
+		cmd := exec.CommandContext(ctx, o.layout.CaddyBin(), "validate", "--config", path)
+		cmd.Env = append(os.Environ(), o.caddyEnv()...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("caddy validate: %s: %w", lastLines(string(out), 10), err)
+		}
+		return nil
+	})
 }
 
 func ensureDefaultSite(root string) error {

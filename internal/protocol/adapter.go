@@ -53,6 +53,12 @@ type Validator interface {
 	Validate(cfg *config.ProtocolConfig) error
 }
 
+// ConfigChecker 由能在启动前校验配置文件的协议实现。
+// 部署时先把配置写到临时路径 path 并校验，通过后才替换正式配置
+type ConfigChecker interface {
+	CheckConfig(ctx context.Context, path string) error
+}
+
 // CertConsumer 由需要读取证书文件的协议实现。
 // 编排器会等证书签发后再启动它；续期后的重新加载由协议程序自己负责。
 type CertConsumer interface {

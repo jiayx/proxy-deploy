@@ -209,6 +209,22 @@ func PruneBinaries(binDir string, keep []string) ([]string, error) {
 	return removed, nil
 }
 
+// WriteFileChecked 先把内容写到 dest 旁的临时文件，用 check 校验通过后再替换 dest。
+// 校验失败时 dest 保持原样，正在运行的服务重启后仍读到旧配置。
+// 临时文件保留原扩展名（config.json → config.check.json），便于按扩展名识别格式的校验工具。
+func WriteFileChecked(dest string, data []byte, mode os.FileMode, check func(path string) error) error {
+	ext := filepath.Ext(dest)
+	tmp := strings.TrimSuffix(dest, ext) + ".check" + ext
+	if err := WriteFile(tmp, data, mode); err != nil {
+		return err
+	}
+	if err := check(tmp); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return os.Rename(tmp, dest)
+}
+
 // CopyFile 把 src 复制到 dest（覆盖）。
 func CopyFile(src, dest string, mode os.FileMode) error {
 	data, err := os.ReadFile(src)

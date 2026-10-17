@@ -37,7 +37,7 @@ func TestGenerateConfig(t *testing.T) {
 	if in.Type != "anytls" || in.Users[0]["password"] != "secret" || len(in.PaddingScheme) != 2 || in.TLS != nil {
 		t.Fatalf("unexpected config: %s", data)
 	}
-	if svc, _ := a.Service(cfg, protocol.Runtime{}); svc.Args[0] != "/opt/pd/bin/sing-box" || svc.Args[3] != "/opt/pd/etc/anytls/config.json" {
+	if svc, _ := a.Service(cfg, protocol.Runtime{}); svc.Args[0] != "/opt/pd/bin/sing-box" || svc.Args[len(svc.Args)-1] != "/opt/pd/etc/anytls/config.json" {
 		t.Fatalf("unexpected service args: %v", svc.Args)
 	}
 

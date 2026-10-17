@@ -42,6 +42,10 @@ func (a *Adapter) Validate(cfg *config.ProtocolConfig) error {
 
 func (a *Adapter) Install(ctx context.Context) error { return singbox.Install(ctx, a.layout) }
 
+func (a *Adapter) CheckConfig(ctx context.Context, path string) error {
+	return singbox.Check(ctx, a.layout, path)
+}
+
 func (a *Adapter) GenerateConfig(cfg *config.ProtocolConfig, rt protocol.Runtime) ([]byte, error) {
 	if rt.Cert == nil {
 		return nil, fmt.Errorf("hysteria2: certificate is required")
