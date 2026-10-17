@@ -76,6 +76,15 @@ func (s *Service) networks() []string {
 	return []string{s.Network}
 }
 
+// loopbackAddr 返回经网关转发的协议后端的监听地址，端口由适配器固定声明
+func loopbackAddr(a protocol.Adapter) string {
+	lp, ok := a.(protocol.LoopbackPorter)
+	if !ok {
+		panic(fmt.Sprintf("protocol %s is routed through the gateway but declares no loopback port", a.Name()))
+	}
+	return fmt.Sprintf("127.0.0.1:%d", lp.LoopbackPort())
+}
+
 func loopback(n int) string { return fmt.Sprintf("127.0.0.1:%d", loopbackBase+n) }
 
 func issuerFrom(c config.CertificateConfig) caddy.Issuer {
@@ -111,12 +120,6 @@ func (o *Orchestrator) Plan() *Plan {
 	}
 
 	siteAddr, sitePlainAddr := loopback(0), loopback(1)
-	// 协议后端的回环端口按协议的注册顺序固定分配：启用、停用其他协议，
-	// 或新增协议类型（注册在末尾）都不会改变已有协议的端口，也就不会让它们重启
-	protocolPort := map[string]int{}
-	for i, name := range o.registry.Ordered() {
-		protocolPort[name] = 2 + i
-	}
 	webHosts := map[string]bool{c.Domain: true}
 
 	// 网站：未配置时提供一个默认静态站，同时作为协议的伪装和回落
@@ -227,7 +230,7 @@ func (o *Orchestrator) Plan() *Plan {
 
 		if svc.Network == "tcp" {
 			svc.ViaEntry = true
-			svc.Runtime.ListenAddr = loopback(protocolPort[pc.Name])
+			svc.Runtime.ListenAddr = loopbackAddr(a)
 			srv := tcpServer(port)
 			srv.Routes = append(srv.Routes, caddy.TCPRoute{Name: pc.Name, SNI: sni, Upstream: svc.Runtime.ListenAddr, Passthrough: passthrough})
 		} else {
@@ -253,7 +256,7 @@ func (o *Orchestrator) Plan() *Plan {
 		srv := caddy.UDPServer{Port: port}
 		for _, svc := range udpByPort[port] {
 			svc.ViaEntry = true
-			svc.Runtime.ListenAddr = loopback(protocolPort[svc.Cfg.Name])
+			svc.Runtime.ListenAddr = loopbackAddr(svc.Adapter)
 			srv.Routes = append(srv.Routes, caddy.UDPRoute{Name: svc.Cfg.Name, SNI: svc.SNI, Upstream: svc.Runtime.ListenAddr})
 		}
 		udpServers = append(udpServers, srv)

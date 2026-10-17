@@ -30,6 +30,7 @@ func New(layout *paths.Layout) *Adapter {
 }
 
 func (a *Adapter) Name() string                  { return name }
+func (a *Adapter) LoopbackPort() int             { return 20002 }
 func (a *Adapter) Transport() protocol.Transport { return protocol.TransportUDP }
 func (a *Adapter) NeedsCertificate() bool        { return true }
 func (a *Adapter) ConfigPath() string {

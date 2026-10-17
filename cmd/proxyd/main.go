@@ -13,12 +13,7 @@ import (
 	"github.com/jiayx/proxy-deploy/internal/config"
 	"github.com/jiayx/proxy-deploy/internal/entry/caddy"
 	"github.com/jiayx/proxy-deploy/internal/orchestrator"
-	"github.com/jiayx/proxy-deploy/internal/protocol"
-	"github.com/jiayx/proxy-deploy/internal/protocol/anytls"
-	"github.com/jiayx/proxy-deploy/internal/protocol/hysteria2"
-	"github.com/jiayx/proxy-deploy/internal/protocol/ss2022"
-	"github.com/jiayx/proxy-deploy/internal/protocol/tuic"
-	"github.com/jiayx/proxy-deploy/internal/protocol/vlessreality"
+	"github.com/jiayx/proxy-deploy/internal/protocol/builtin"
 	"github.com/jiayx/proxy-deploy/pkg/paths"
 )
 
@@ -156,13 +151,7 @@ func run(ctx context.Context, cmd string, rest []string, layout *paths.Layout,
 	if err != nil {
 		return err
 	}
-	// 注册顺序决定协议后端的回环端口，新协议只能加在末尾
-	reg := protocol.NewRegistry()
-	reg.Register(hysteria2.New(layout))
-	reg.Register(anytls.New(layout))
-	reg.Register(vlessreality.New(layout))
-	reg.Register(tuic.New(layout))
-	reg.Register(ss2022.New(layout))
+	reg := builtin.Registry(layout)
 	orch := orchestrator.New(reg, cfg, layout)
 	plan := orch.Plan()
 

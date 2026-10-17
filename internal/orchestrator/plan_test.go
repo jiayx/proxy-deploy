@@ -7,12 +7,7 @@ import (
 	"testing"
 
 	"github.com/jiayx/proxy-deploy/internal/config"
-	"github.com/jiayx/proxy-deploy/internal/protocol"
-	"github.com/jiayx/proxy-deploy/internal/protocol/anytls"
-	"github.com/jiayx/proxy-deploy/internal/protocol/hysteria2"
-	"github.com/jiayx/proxy-deploy/internal/protocol/ss2022"
-	"github.com/jiayx/proxy-deploy/internal/protocol/tuic"
-	"github.com/jiayx/proxy-deploy/internal/protocol/vlessreality"
+	"github.com/jiayx/proxy-deploy/internal/protocol/builtin"
 	"github.com/jiayx/proxy-deploy/pkg/paths"
 	"github.com/jiayx/proxy-deploy/pkg/secrets"
 )
@@ -23,12 +18,7 @@ func newOrch(t *testing.T, cfg *config.DeployConfig) *Orchestrator {
 		t.Fatal(err)
 	}
 	layout := paths.New("/opt/pd", false)
-	reg := protocol.NewRegistry()
-	reg.Register(hysteria2.New(layout))
-	reg.Register(anytls.New(layout))
-	reg.Register(vlessreality.New(layout))
-	reg.Register(tuic.New(layout))
-	reg.Register(ss2022.New(layout))
+	reg := builtin.Registry(layout)
 	return New(reg, cfg, layout)
 }
 

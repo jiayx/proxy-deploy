@@ -29,7 +29,7 @@
 - 主入口端口总是开启 UDP 网关：内部网站因此提供 HTTP/3，TCP 网站通过 `Alt-Svc` 通告对外端口。需要放行 UDP/443。
 - 网关为每个连接（UDP 为每个会话）记录一条日志（客户端地址、SNI、路由、后端本地地址、字节数、时长），`status` 显示每条路由的活动连接、累计连接和流量。网关重载配置时不会断开已建立的 TCP 连接和 QUIC 会话。
 - UDP 会话按客户端地址识别，空闲 2 分钟后清理。网关同时学习每个会话的 QUIC 连接 ID，客户端地址变化（NAT 重新映射、切换网络但沿用原 socket）后仍能找回原会话，连接不断；客户端主动迁移并换用新连接 ID 时需要重新连接。Linux 上网关用 UDP GRO/GSO 成批转发后端回包。
-- 内部网站以 HTTPS 监听 `127.0.0.1:20000`（供 TCP 入口转发，支持 HTTP/1.1 和 HTTP/2；入口通过 PROXY protocol 传递客户端地址，网站访问日志和反代后端的 `X-Forwarded-For` 都是真实 IP），同时以明文 HTTP 监听 `127.0.0.1:20001`（供协议伪装反代，保留原始 Host）；协议回环后端从 `20002` 起按协议的注册顺序固定分配（每种协议占一个端口，新协议注册在末尾），启用或停用其他协议、新增协议类型都不会改变已有协议的端口。
+- 内部网站以 HTTPS 监听 `127.0.0.1:20000`（供 TCP 入口转发，支持 HTTP/1.1 和 HTTP/2；入口通过 PROXY protocol 传递客户端地址，网站访问日志和反代后端的 `X-Forwarded-For` 都是真实 IP），同时以明文 HTTP 监听 `127.0.0.1:20001`（供协议伪装反代，保留原始 Host）；每个经网关转发的协议在适配器中声明固定的回环端口（Hysteria2 20002、AnyTLS 20003、VLESS + Reality 20004、TUIC 20005），测试保证互不重复；启用、停用、新增或删除其他协议都不会改变已有协议的端口，也就不会让它们重启。
 - 协议后端（sing-box）日志中的来源地址都是 `127.0.0.1`：sing-box 自 1.6 起不再支持 PROXY protocol。客户端真实地址记录在网关日志中，网关日志的 `upstream_local` 与 sing-box 日志中的来源端口一一对应。
 - Caddy 统一管理主域名、启用协议的 SNI 和网站 `host` 的证书。Hysteria2 启动前会等待证书文件就绪（最多 3 分钟），续期后 sing-box 自动重新加载证书文件，无需重启服务；AnyTLS 的客户端 TLS 在 Caddy 终结，无需读取证书文件。
 
@@ -263,4 +263,4 @@ pkg/paths/                 安装前缀和系统 / 用户模式路径
 pkg/system/                下载、解压、版本安装、文件写入和 systemctl 封装
 ```
 
-新增协议需实现 `protocol.Adapter` 并在 `cmd/proxyd/main.go` 注册；按需实现 `Validator`（规划阶段校验）和 `CertConsumer`（读取证书文件，编排器会等证书签发后再启动）接口。以 sing-box 为服务端的协议可复用 `internal/protocol/singbox` 的安装和配置生成，只需提供 inbound 字段。编排器统一处理入口、证书和服务生命周期；`TransportBoth`（同时监听 TCP 和 UDP）当前仍会被规划器拒绝。
+新增协议需实现 `protocol.Adapter` 并在 `internal/protocol/builtin` 注册；经网关转发的协议还要实现 `LoopbackPorter`，声明一个未被占用的固定回环端口；按需实现 `Validator`（规划阶段校验）和 `CertConsumer`（读取证书文件，编排器会等证书签发后再启动）接口。以 sing-box 为服务端的协议可复用 `internal/protocol/singbox` 的安装和配置生成，只需提供 inbound 字段。编排器统一处理入口、证书和服务生命周期；`TransportBoth`（同时监听 TCP 和 UDP）当前仍会被规划器拒绝。

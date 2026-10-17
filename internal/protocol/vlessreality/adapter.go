@@ -37,6 +37,7 @@ func New(layout *paths.Layout) *Adapter {
 }
 
 func (a *Adapter) Name() string                  { return name }
+func (a *Adapter) LoopbackPort() int             { return 20004 }
 func (a *Adapter) Transport() protocol.Transport { return protocol.TransportTCP }
 func (a *Adapter) PassthroughTLS() bool          { return true }
 func (a *Adapter) DefaultSNI() string            { return defaultSNI }
