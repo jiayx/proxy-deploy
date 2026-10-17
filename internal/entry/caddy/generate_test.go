@@ -29,6 +29,7 @@ func TestGenerate(t *testing.T) {
 		SiteAddr:      "127.0.0.1:20000",
 		SitePlainAddr: "127.0.0.1:20001",
 		TCPServers:    []TCPServer{{Port: 8443, Routes: []TCPRoute{{Name: "anytls", SNI: "t.a.com", Upstream: "127.0.0.1:20002"}}}},
+		UDPServers:    []UDPServer{{Port: 8443, Routes: []UDPRoute{{Name: "hysteria2", SNI: "h.a.com", Upstream: "127.0.0.1:20003"}}}},
 		Sites:         []Site{{Root: "/www"}, {Host: "app.a.com", Upstream: "127.0.0.1:3000"}},
 	})
 	if err != nil {
@@ -46,15 +47,20 @@ func TestGenerate(t *testing.T) {
 		`"fallback_sni": "a.com"`,
 		`"proxy_protocol": true`,
 		`"wrapper": "proxy_protocol"`,
+		`"udp/:8443"`,
+		`"upstream": "127.0.0.1:20003"`,
+		`"h3"`,
+		`h3=\":8443\"; ma=86400`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("generated config lacks %s", want)
 		}
 	}
 
-	// 有 host 的站点必须排在兜底站点之前，否则永远匹配不到
+	// 第一条路由设置 Alt-Svc；有 host 的站点必须排在兜底站点之前，否则永远匹配不到
 	routes := cfg["apps"].(map[string]any)["http"].(map[string]any)["servers"].(map[string]any)["site"].(map[string]any)["routes"].([]any)
-	if len(routes) != 2 || routes[0].(map[string]any)["match"] == nil || routes[1].(map[string]any)["match"] != nil {
+	if len(routes) != 3 || routes[0].(map[string]any)["terminal"] != nil ||
+		routes[1].(map[string]any)["match"] == nil || routes[2].(map[string]any)["match"] != nil {
 		t.Fatalf("host-matched site should precede fallback: %v", routes)
 	}
 

@@ -41,11 +41,19 @@ type Server struct {
 	HandshakeTimeout caddy.Duration `json:"handshake_timeout,omitempty"`
 	// DialTimeout 限制连接后端的时间，默认 5 秒
 	DialTimeout caddy.Duration `json:"dial_timeout,omitempty"`
+	// IdleTimeout 是 UDP 会话的空闲超时，默认 2 分钟
+	IdleTimeout caddy.Duration `json:"idle_timeout,omitempty"`
 
-	app       *App
-	tlsConfig func() *tls.Config
-	listeners []net.Listener
-	logger    *zap.Logger
+	app         *App
+	tlsConfig   func() *tls.Config
+	listeners   []net.Listener
+	packetConns []packetConn
+	logger      *zap.Logger
+}
+
+type packetConn struct {
+	pc    net.PacketConn
+	table *udpTable
 }
 
 const (
@@ -84,9 +92,16 @@ func (a *App) Provision(ctx caddy.Context) error {
 		if srv.Fallback != nil {
 			routes = append(routes[:len(routes):len(routes)], srv.Fallback)
 		}
+		udp, err := isUDPServer(srv.Listen)
+		if err != nil {
+			return fmt.Errorf("server %s: %w", name, err)
+		}
 		for i, r := range routes {
 			if r.Name == "" || r.Upstream == "" {
 				return fmt.Errorf("server %s route %d: name and upstream are required", name, i)
+			}
+			if udp && (r.TLS != TLSPassthrough || r.ProxyProtocol) {
+				return fmt.Errorf("server %s route %s: UDP routes only support tls passthrough without proxy_protocol", name, r.Name)
 			}
 			switch r.TLS {
 			case TLSTerminate:
@@ -105,6 +120,9 @@ func (a *App) Provision(ctx caddy.Context) error {
 		}
 		if srv.DialTimeout <= 0 {
 			srv.DialTimeout = caddy.Duration(5 * time.Second)
+		}
+		if srv.IdleTimeout <= 0 {
+			srv.IdleTimeout = caddy.Duration(2 * time.Minute)
 		}
 		srv.app = a
 		srv.logger = a.logger.With(zap.String("server", name))
@@ -131,18 +149,22 @@ func (a *App) Start() error {
 			if err != nil {
 				return fmt.Errorf("server %s: %w", name, err)
 			}
-			if na.Network != "tcp" && na.Network != "tcp4" && na.Network != "tcp6" {
-				return fmt.Errorf("server %s: unsupported network %q", name, na.Network)
-			}
 			for port := uint(0); port < na.PortRangeSize(); port++ {
-				// Caddy 在重载配置时复用同一个 socket，不会断开监听
+				// Caddy 在重载配置时复用同一个 socket（UDP 为同端口的新 socket），不会断开监听
 				ln, err := na.Listen(a.ctx, port, net.ListenConfig{})
 				if err != nil {
 					return fmt.Errorf("server %s: listen %s: %w", name, addr, err)
 				}
-				l := ln.(net.Listener)
-				srv.listeners = append(srv.listeners, l)
-				go srv.serve(l)
+				switch l := ln.(type) {
+				case net.Listener:
+					srv.listeners = append(srv.listeners, l)
+					go srv.serve(l)
+				case net.PacketConn:
+					t := tableFor(na.JoinHostPort(port))
+					t.attach(srv, l)
+					srv.packetConns = append(srv.packetConns, packetConn{l, t})
+					go srv.serveUDP(l, t)
+				}
 			}
 			srv.logger.Info("listening", zap.String("address", addr))
 		}
@@ -157,8 +179,36 @@ func (a *App) Stop() error {
 			_ = l.Close()
 		}
 		srv.listeners = nil
+		for _, p := range srv.packetConns {
+			_ = p.pc.Close()
+			p.table.detach(p.pc)
+		}
+		srv.packetConns = nil
 	}
 	return nil
+}
+
+// isUDPServer 判断监听地址是否都是 UDP；同一个 server 不能混用 TCP 和 UDP
+func isUDPServer(listen []string) (bool, error) {
+	var tcp, udp bool
+	for _, addr := range listen {
+		na, err := caddy.ParseNetworkAddress(addr)
+		if err != nil {
+			return false, err
+		}
+		switch na.Network {
+		case "tcp", "tcp4", "tcp6":
+			tcp = true
+		case "udp", "udp4", "udp6":
+			udp = true
+		default:
+			return false, fmt.Errorf("unsupported network %q", na.Network)
+		}
+	}
+	if tcp && udp {
+		return false, fmt.Errorf("listen mixes tcp and udp addresses")
+	}
+	return udp, nil
 }
 
 var (

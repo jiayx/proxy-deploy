@@ -10,21 +10,23 @@
 
 ```text
 公网 TCP/443 → 网关（proxy_gateway）按 TLS SNI 分流
-               ├─ anytls.example.com → Caddy 终结客户端 TLS
-               │                      → TLS 连接本机 AnyTLS 后端
-               └─ 其他 SNI / 网站流量 → 内部 HTTPS 网站（127.0.0.1:20000）
+               ├─ anytls.example.com    → 网关终结 TLS → 回环地址上的 AnyTLS（sing-box）
+               └─ 其他 SNI / 非 TLS 流量 → 内部 HTTPS 网站（127.0.0.1:20000，附 PROXY protocol）
 
-公网 UDP/443 → Hysteria2 直接监听，读取 Caddy 管理的证书
-               └─ 非 Hysteria 请求 → 伪装网站（默认反代内部网站）
+公网 UDP/443 → 网关按 QUIC SNI 分流（解密 QUIC Initial 包取得 ClientHello）
+               ├─ hysteria2.example.com → 回环地址上的 Hysteria2（sing-box，读取 Caddy 管理的证书）
+               │                          └─ 认证失败的请求 → 伪装网站（反代内部网站）
+               └─ 其他 SNI（如浏览器 HTTP/3）→ 内部网站的 HTTP/3（127.0.0.1:20000）
 
 公网 TCP/80  → HTTP 跳转 HTTPS / ACME HTTP-01 验证
 ```
 
-- TCP 和 UDP 可以使用相同的端口号。TCP 协议通过不同 SNI 与网站共享入口，后端只监听回环地址；Caddy 用统一管理的证书终结客户端 TLS，再把明文转发到回环地址上的协议后端（例如 AnyTLS 的 sing-box inbound）。
-- UDP 协议直接监听公网端口。多个 QUIC 协议共享同一个 UDP 端口需要网关按 QUIC SNI 分流，尚未实现，规划时会报冲突；见 [设计文档](docs/design.md)。
-- 网关为每个连接记录一条日志（客户端地址、SNI、路由、后端本地地址、字节数、时长），`status` 显示每条路由的活动连接、累计连接和流量。网关重载配置时不会断开已建立的连接。
+- 所有公网流量先进入网关，由网关决定交给网站还是代理协议，协议后端只监听回环地址；设计见 [docs/design.md](docs/design.md)。TCP 协议的客户端 TLS 由网关用统一管理的证书终结；QUIC 协议的数据报原样转发，由后端终结。多个协议可以共享同一个 TCP 或 UDP 端口，按 SNI 区分。
+- 主入口端口总是开启 UDP 网关：内部网站因此提供 HTTP/3，TCP 网站通过 `Alt-Svc` 通告对外端口。需要放行 UDP/443。
+- 网关为每个连接（UDP 为每个会话）记录一条日志（客户端地址、SNI、路由、后端本地地址、字节数、时长），`status` 显示每条路由的活动连接、累计连接和流量。网关重载配置时不会断开已建立的 TCP 连接和 QUIC 会话。
+- UDP 会话按客户端地址识别，空闲 2 分钟后清理。客户端切换网络（地址或端口变化，即 QUIC 连接迁移）后原会话无法继续，需要客户端重新连接。Linux 上网关用 UDP GRO/GSO 成批转发后端回包。
 - 内部网站以 HTTPS 监听 `127.0.0.1:20000`（供 TCP 入口转发，支持 HTTP/1.1 和 HTTP/2；入口通过 PROXY protocol 传递客户端地址，网站访问日志和反代后端的 `X-Forwarded-For` 都是真实 IP），同时以明文 HTTP 监听 `127.0.0.1:20001`（供协议伪装反代，保留原始 Host）；协议回环后端从 `20002` 起分配。
-- 经 Caddy 转发的 TCP 协议（如 AnyTLS）在 sing-box 日志中的来源地址是 `127.0.0.1`：sing-box 自 1.6 起不再支持 PROXY protocol，无法从入口获得客户端地址。直接监听公网端口的协议（如 Hysteria2）能看到真实 IP。
+- 协议后端（sing-box）日志中的来源地址都是 `127.0.0.1`：sing-box 自 1.6 起不再支持 PROXY protocol。客户端真实地址记录在网关日志中，网关日志的 `upstream_local` 与 sing-box 日志中的来源端口一一对应。
 - Caddy 统一管理主域名、启用协议的 SNI 和网站 `host` 的证书。Hysteria2 启动前会等待证书文件就绪（最多 3 分钟），续期后 sing-box 自动重新加载证书文件，无需重启服务；AnyTLS 的客户端 TLS 在 Caddy 终结，无需读取证书文件。
 
 ## 构建与部署

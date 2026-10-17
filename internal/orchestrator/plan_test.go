@@ -58,7 +58,7 @@ func TestPlanDefault(t *testing.T) {
 		byName[s.Cfg.Name] = s
 	}
 	hy := byName["hysteria2"]
-	if hy.ViaEntry || hy.Runtime.ListenAddr != ":443" || hy.Runtime.SiteURL != "http://127.0.0.1:20001" || hy.Runtime.Cert == nil || hy.Runtime.Cert.Name != "hysteria2.example.com" {
+	if !hy.ViaEntry || hy.Runtime.ListenAddr != "127.0.0.1:20003" || hy.Runtime.SiteURL != "http://127.0.0.1:20001" || hy.Runtime.Cert == nil || hy.Runtime.Cert.Name != "hysteria2.example.com" {
 		t.Fatalf("unexpected hysteria2 plan: %+v %+v", hy, hy.Runtime)
 	}
 	if byName["anytls"].Runtime.Cert != nil {
@@ -77,7 +77,7 @@ func TestPlanDefault(t *testing.T) {
 	for _, port := range p.Ports {
 		ports = append(ports, port.Network+port.Addr)
 	}
-	want := "tcp127.0.0.1:20000,tcp127.0.0.1:20001,tcp127.0.0.1:20002,tcp:443,tcp:80,udp:443"
+	want := "tcp127.0.0.1:20000,tcp127.0.0.1:20001,tcp127.0.0.1:20002,tcp:443,tcp:80,udp127.0.0.1:20000,udp127.0.0.1:20003,udp:443"
 	if got := strings.Join(ports, ","); got != want {
 		t.Fatalf("ports:\n got %s\nwant %s", got, want)
 	}
@@ -111,18 +111,30 @@ type fakeUDP struct{ protocol.Adapter }
 func (fakeUDP) Name() string                  { return "tuic" }
 func (fakeUDP) Transport() protocol.Transport { return protocol.TransportUDP }
 
-func TestPlanSharedUDPPortNotSupportedYet(t *testing.T) {
-	cfg := baseConfig(proto("hysteria2"), proto("tuic"))
-	o := newOrch(t, cfg)
+func TestPlanUDPThroughGateway(t *testing.T) {
+	o := newOrch(t, baseConfig(proto("hysteria2"), proto("tuic")))
 	o.registry.Register(fakeUDP{})
 	p := o.Plan()
-	if len(p.Conflicts) != 1 || !strings.Contains(p.Conflicts[0].Reason, "UDP/443") {
-		t.Fatalf("want shared UDP port conflict, got %+v", p.Conflicts)
+	if len(p.Conflicts) != 0 {
+		t.Fatalf("UDP protocols should share the entry port, got %+v", p.Conflicts)
 	}
+	if len(p.Caddy.UDPServers) != 1 || p.Caddy.UDPServers[0].Port != 443 {
+		t.Fatalf("want one UDP gateway on 443, got %+v", p.Caddy.UDPServers)
+	}
+	var routes []string
+	for _, r := range p.Caddy.UDPServers[0].Routes {
+		routes = append(routes, r.Name+"="+r.SNI+"→"+r.Upstream)
+	}
+	want := "hysteria2=hysteria2.example.com→127.0.0.1:20002,tuic=tuic.example.com→127.0.0.1:20003"
+	if got := strings.Join(routes, ","); got != want {
+		t.Fatalf("routes:\n got %s\nwant %s", got, want)
+	}
+}
 
-	cfg.Protocols[1].Port = 8443
-	if p := o.Plan(); len(p.Conflicts) != 0 {
-		t.Fatalf("separate UDP ports should be fine, got %+v", p.Conflicts)
+func TestPlanUDPGatewayWithoutUDPProtocols(t *testing.T) {
+	p := newOrch(t, baseConfig(proto("anytls"))).Plan()
+	if len(p.Caddy.UDPServers) != 1 || p.Caddy.UDPServers[0].Port != 443 || len(p.Caddy.UDPServers[0].Routes) != 0 {
+		t.Fatalf("entry port should always have a UDP gateway for the site's HTTP/3, got %+v", p.Caddy.UDPServers)
 	}
 }
 

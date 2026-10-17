@@ -208,12 +208,17 @@ func printPlan(p *orchestrator.Plan) {
 		parts = append(parts, "其他 → 网站 "+p.Caddy.SiteAddr)
 		fmt.Printf("  %s\n", strings.Join(parts, "；"))
 	}
-	fmt.Printf("  TCP/%-5d HTTP 跳转 HTTPS / ACME 验证\n", p.Caddy.HTTPPort)
-	for _, s := range p.Services {
-		if !s.ViaEntry {
-			fmt.Printf("  UDP/%-5d %s 直接监听（端口独占，无需分流）\n", s.PublicPort, s.Cfg.Name)
+	for _, s := range p.Caddy.UDPServers {
+		var parts []string
+		for _, r := range s.Routes {
+			parts = append(parts, fmt.Sprintf("%s → %s", r.SNI, r.Upstream))
 		}
+		if s.Port == p.Caddy.HTTPSPort {
+			parts = append(parts, "其他 → 网站 HTTP/3 "+p.Caddy.SiteAddr)
+		}
+		fmt.Printf("  UDP/%-5d 网关  %s\n", s.Port, strings.Join(parts, "；"))
 	}
+	fmt.Printf("  TCP/%-5d HTTP 跳转 HTTPS / ACME 验证\n", p.Caddy.HTTPPort)
 
 	fmt.Println("协议:")
 	for _, s := range p.Services {

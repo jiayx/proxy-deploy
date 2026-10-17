@@ -60,6 +60,12 @@
 
 证书由 Caddy `tls` 应用的 `automate` 统一申请。网关终结 TLS 时使用 Caddy 的连接策略，按 SNI 取证书。
 
+## UDP 网关
+
+- 会话按客户端地址识别。建立前缓存客户端数据报（最多 16 个），从 QUIC Initial 包重组出 ClientHello 后按 SNI 选路由、连接后端并回放缓存。
+- Caddy 重载配置时用 SO_REUSEPORT 绑定同端口的新 socket，所以会话表按监听地址放在进程级，新旧应用实例共用，回包总是经由最新的 socket 发出。
+- 已知限制：不支持 QUIC 连接迁移（客户端地址变化后需重新连接）；上传方向逐个数据报转发，下载方向在 Linux 上用 GRO/GSO 批量转发。单机回环测试中，经网关的 Hysteria2 下载约为直连的 80%。
+
 ## 统计与日志
 
 - 每个连接结束时记一条日志：客户端地址、SNI、路由、后端本地地址、上下行字节、时长。
@@ -68,8 +74,8 @@
 
 ## 实现步骤
 
-1. **TCP 网关**（本阶段）：ClientHello 解析、终结与透传、PROXY protocol、统计与管理接口；Caddy 改为本仓库构建，去掉 caddy-l4。多个 UDP 协议共享端口暂时作为规划冲突拒绝。
-2. **UDP 网关**：QUIC Initial 解密与 ClientHello 重组（跨包、乱序），按客户端地址维护会话并转发；主域名的 HTTP/3 由 Caddy 网站直接提供。Hysteria2 默认退到网关后面；启用混淆的协议作为例外独占端口。
+1. **TCP 网关**（已完成）：ClientHello 解析、终结与透传、PROXY protocol、统计与管理接口；Caddy 改为本仓库构建，去掉 caddy-l4。
+2. **UDP 网关**（已完成）：QUIC Initial 解密与 ClientHello 重组（v1/v2，跨包、乱序），按客户端地址维护会话并转发，Linux 上用 GRO/GSO 成批转发回包；主域名的 HTTP/3 由 Caddy 网站直接提供，Hysteria2 退到网关后面。以后支持 Hysteria2 混淆时，启用混淆的协议作为例外独占端口（混淆后的数据报无法识别 SNI）。
 3. **sing-box 进程监管**：由网关启动并监管 sing-box，Caddy 重载配置时保留没有变化的协议进程；systemd 只剩 Caddy 一个服务。
 4. **管理与配置**：Caddyfile 支持、管理接口（状态、用户）、`proxyd` 退化成安装器。
 5. **其他**：接入已有 Web 服务器（非代理流量透传给现有 nginx / Caddy）、WARP 等出口。

@@ -3,6 +3,8 @@
 // 入口职责：
 //   - TCP 端口  网关按 TLS SNI 分流：协议后端由网关用统一证书终结 TLS 后转发，
 //     其余流量原样交给内部 HTTPS 网站（附 PROXY protocol）
+//   - UDP 端口  网关按 QUIC SNI 分流：协议的 QUIC 连接原样转给后端，
+//     主入口端口上的其余 QUIC 连接交给内部网站的 HTTP/3
 //   - HTTP 端口 跳转到 HTTPS，同时承担 ACME HTTP-01 验证
 //   - 证书由 Caddy 统一申请、续期，存放在安装目录下
 package caddy
@@ -56,6 +58,20 @@ type TCPServer struct {
 	Routes []TCPRoute
 }
 
+// UDPRoute 是 UDP 入口上的一条 QUIC SNI 路由，数据报原样转发（QUIC 由后端终结）
+type UDPRoute struct {
+	Name     string
+	SNI      string
+	Upstream string
+}
+
+// UDPServer 是一个 UDP 入口端口。HTTPSPort 上未匹配任何路由的连接交给内部网站的 HTTP/3，
+// 其他端口上的直接丢弃
+type UDPServer struct {
+	Port   int
+	Routes []UDPRoute
+}
+
 // Site 是一个网站：静态目录或反向代理
 type Site struct {
 	Host     string // 空表示兜底
@@ -79,6 +95,7 @@ type Spec struct {
 	SitePlainAddr string
 
 	TCPServers []TCPServer
+	UDPServers []UDPServer
 	Sites      []Site
 }
 
@@ -152,7 +169,29 @@ func gatewayApp(s Spec) obj {
 			"fallback": obj{"name": "site", "tls": "passthrough", "upstream": s.SiteAddr, "proxy_protocol": true},
 		}
 	}
+	for _, srv := range s.UDPServers {
+		routes := []obj{}
+		for _, r := range srv.Routes {
+			routes = append(routes, obj{"name": r.Name, "sni": []string{r.SNI}, "tls": "passthrough", "upstream": r.Upstream})
+		}
+		server := obj{"listen": []string{fmt.Sprintf("udp/:%d", srv.Port)}, "routes": routes}
+		if srv.Port == s.HTTPSPort {
+			// 其余 QUIC 连接（浏览器的 HTTP/3、未知 SNI）交给内部网站的 HTTP/3
+			server["fallback"] = obj{"name": "site_h3", "tls": "passthrough", "upstream": s.SiteAddr}
+		}
+		servers[fmt.Sprintf("udp_%d", srv.Port)] = server
+	}
 	return obj{"servers": servers}
+}
+
+// siteHTTP3 报告内部网站是否提供 HTTP/3（主入口端口上有 UDP 网关）
+func siteHTTP3(s Spec) bool {
+	for _, srv := range s.UDPServers {
+		if srv.Port == s.HTTPSPort {
+			return true
+		}
+	}
+	return false
 }
 
 func httpApp(s Spec) obj {
@@ -176,6 +215,16 @@ func httpApp(s Spec) obj {
 	if fallback != nil {
 		routes = append(routes, fallback)
 	}
+	protocols := []string{"h1", "h2"}
+	if siteHTTP3(s) {
+		protocols = append(protocols, "h3")
+		// Caddy 默认按内部监听端口通告 HTTP/3，改成对外的入口端口
+		altSvc := obj{"handle": []obj{{
+			"handler":  "headers",
+			"response": obj{"set": obj{"Alt-Svc": []string{fmt.Sprintf(`h3=":%d"; ma=86400`, s.HTTPSPort)}}},
+		}}}
+		routes = append([]obj{altSvc}, routes...)
+	}
 
 	location := "https://{http.request.host}{http.request.uri}"
 	if s.HTTPSPort != 443 {
@@ -186,7 +235,7 @@ func httpApp(s Spec) obj {
 		// 内部 HTTPS 网站：只监听回环地址，由 l4 入口转发过来
 		"site": obj{
 			"listen":          []string{s.SiteAddr},
-			"protocols":       []string{"h1", "h2"},
+			"protocols":       protocols,
 			"automatic_https": obj{"disable": true},
 			// 先解析网关加上的 PROXY protocol 头再做 TLS，网站和反代后端看到的是客户端真实地址
 			"listener_wrappers": []obj{

@@ -209,18 +209,21 @@ func (o *Orchestrator) Plan() *Plan {
 		p.Services = append(p.Services, svc)
 	}
 
-	// UDP：协议直接监听公网端口。多个 QUIC 协议共享一个 UDP 端口需要网关按 QUIC SNI 分流，尚未实现
+	// UDP：网关按 QUIC SNI 把连接转给回环地址上的协议后端。
+	// 主入口端口总有 UDP 网关，未匹配的 QUIC 连接交给内部网站的 HTTP/3
+	if _, ok := udpByPort[c.Entry.HTTPSPort]; !ok {
+		udpOrder = append([]int{c.Entry.HTTPSPort}, udpOrder...)
+	}
+	var udpServers []caddy.UDPServer
 	for _, port := range udpOrder {
-		group := udpByPort[port]
-		if len(group) > 1 {
-			var names []string
-			for _, svc := range group {
-				names = append(names, svc.Cfg.Name)
-			}
-			conflict(strings.Join(names, ", "), fmt.Sprintf("共享 UDP/%d 需要网关按 QUIC SNI 分流，暂未支持", port), "为其中一个协议设置不同的 port")
-			continue
+		srv := caddy.UDPServer{Port: port}
+		for _, svc := range udpByPort[port] {
+			svc.ViaEntry = true
+			svc.Runtime.ListenAddr = loopback(nextLoopback)
+			nextLoopback++
+			srv.Routes = append(srv.Routes, caddy.UDPRoute{Name: svc.Cfg.Name, SNI: svc.SNI, Upstream: svc.Runtime.ListenAddr})
 		}
-		group[0].Runtime.ListenAddr = fmt.Sprintf(":%d", port)
+		udpServers = append(udpServers, srv)
 	}
 
 	for _, name := range certNames {
@@ -253,6 +256,7 @@ func (o *Orchestrator) Plan() *Plan {
 		SiteAddr:      siteAddr,
 		SitePlainAddr: sitePlainAddr,
 		TCPServers:    tcp,
+		UDPServers:    udpServers,
 		Sites:         sites,
 	}
 
@@ -260,9 +264,13 @@ func (o *Orchestrator) Plan() *Plan {
 	add := func(network, addr string) { p.Ports = append(p.Ports, Port{network, addr}) }
 	add("tcp", fmt.Sprintf(":%d", c.Entry.HTTPPort))
 	add("tcp", siteAddr)
+	add("udp", siteAddr) // 内部网站的 HTTP/3
 	add("tcp", sitePlainAddr)
 	for _, s := range tcp {
 		add("tcp", fmt.Sprintf(":%d", s.Port))
+	}
+	for _, s := range udpServers {
+		add("udp", fmt.Sprintf(":%d", s.Port))
 	}
 	for _, svc := range p.Services {
 		add(svc.Network, svc.Runtime.ListenAddr)
