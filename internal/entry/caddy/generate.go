@@ -86,6 +86,9 @@ type Spec struct {
 	HTTPSPort int    // 主入口端口，用于 HTTP 跳转
 	HTTPPort  int    // HTTP 入口端口
 	SiteAddr  string // 内部 HTTPS 网站监听地址，如 127.0.0.1:20000
+	// SitePlainAddr 是同一网站的明文 HTTP 监听地址（回环），供协议伪装反代使用，
+	// 免去对内部 HTTPS 站点做证书校验
+	SitePlainAddr string
 
 	TCPServers []TCPServer
 	UDPServers []UDPServer
@@ -224,6 +227,11 @@ func httpApp(s Spec) obj {
 			// 存在连接策略即启用 TLS；不带 SNI 的连接使用 DefaultSNI 的证书
 			"tls_connection_policies": []obj{{"fallback_sni": s.DefaultSNI}},
 			"routes":                  routes,
+		},
+		"site_plain": obj{
+			"listen":          []string{s.SitePlainAddr},
+			"automatic_https": obj{"disable": true},
+			"routes":          routes,
 		},
 		"redirect": obj{
 			"listen":          []string{fmt.Sprintf(":%d", s.HTTPPort)},

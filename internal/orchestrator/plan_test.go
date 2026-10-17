@@ -49,7 +49,7 @@ func TestPlanDefault(t *testing.T) {
 		t.Fatalf("want one TCP server on 443, got %+v", p.Caddy.TCPServers)
 	}
 	routes := p.Caddy.TCPServers[0].Routes
-	if len(routes) != 1 || routes[0].SNI != "anytls.example.com" || routes[0].Upstream != "127.0.0.1:20001" {
+	if len(routes) != 1 || routes[0].SNI != "anytls.example.com" || routes[0].Upstream != "127.0.0.1:20002" {
 		t.Fatalf("unexpected anytls route: %+v", routes)
 	}
 	if len(p.Caddy.UDPServers) != 0 {
@@ -61,7 +61,7 @@ func TestPlanDefault(t *testing.T) {
 		byName[s.Cfg.Name] = s
 	}
 	hy := byName["hysteria2"]
-	if hy.ViaEntry || hy.Runtime.ListenAddr != ":443" || hy.Runtime.Cert == nil || hy.Runtime.Cert.Name != "hysteria2.example.com" {
+	if hy.ViaEntry || hy.Runtime.ListenAddr != ":443" || hy.Runtime.SiteURL != "http://127.0.0.1:20001" || hy.Runtime.Cert == nil || hy.Runtime.Cert.Name != "hysteria2.example.com" {
 		t.Fatalf("unexpected hysteria2 plan: %+v %+v", hy, hy.Runtime)
 	}
 	if byName["anytls"].Runtime.Cert != nil {
@@ -80,7 +80,7 @@ func TestPlanDefault(t *testing.T) {
 	for _, port := range p.Ports {
 		ports = append(ports, port.Network+port.Addr)
 	}
-	want := "tcp127.0.0.1:20000,tcp127.0.0.1:20001,tcp:443,tcp:80,udp:443"
+	want := "tcp127.0.0.1:20000,tcp127.0.0.1:20001,tcp127.0.0.1:20002,tcp:443,tcp:80,udp:443"
 	if got := strings.Join(ports, ","); got != want {
 		t.Fatalf("ports:\n got %s\nwant %s", got, want)
 	}

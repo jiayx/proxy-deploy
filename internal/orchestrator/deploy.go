@@ -53,7 +53,6 @@ func (o *Orchestrator) Deploy(ctx context.Context, p *Plan, caddyBinary string, 
 	for _, c := range p.Certs {
 		m.Certs = append(m.Certs, CertFile{c.Name, c.CertPath})
 	}
-	var watchers []string
 	for _, s := range p.Services {
 		data, err := s.Adapter.GenerateConfig(s.Cfg, s.Runtime)
 		if err != nil {
@@ -68,19 +67,8 @@ func (o *Orchestrator) Deploy(ctx context.Context, p *Plan, caddyBinary string, 
 		if err != nil {
 			return fmt.Errorf("%s service: %w", s.Cfg.Name, err)
 		}
-		if err := system.WriteFile(o.layout.EnvFile(s.Unit), envFile(svc.Env), 0600); err != nil {
-			return err
-		}
 		units = append(units, o.serviceUnit(s, svc))
 		m.Services = append(m.Services, s.Unit)
-		if s.Runtime.Cert != nil {
-			w, err := o.certWatchUnits(s)
-			if err != nil {
-				return err
-			}
-			units = append(units, w...)
-			watchers = append(watchers, w[0].Name)
-		}
 	}
 	for _, u := range units {
 		m.Units = append(m.Units, u.Name)
@@ -119,8 +107,15 @@ func (o *Orchestrator) Deploy(ctx context.Context, p *Plan, caddyBinary string, 
 	if err := o.systemd.DaemonReload(ctx); err != nil {
 		return err
 	}
-	for _, u := range append(append([]string{}, m.Services...), watchers...) {
+	for _, u := range m.Services {
 		if err := o.systemd.Enable(ctx, u); err != nil {
+			return err
+		}
+	}
+
+	// 协议服务随后都会重启；先停掉，避免旧进程占着本次重新分配给 Caddy 的回环端口
+	for _, s := range p.Services {
+		if err := o.systemd.Stop(ctx, s.Unit); err != nil {
 			return err
 		}
 	}
@@ -142,11 +137,6 @@ func (o *Orchestrator) Deploy(ctx context.Context, p *Plan, caddyBinary string, 
 		logf("启动 %s", s.Unit)
 		if err := o.systemd.Restart(ctx, s.Unit); err != nil {
 			return o.withJournal(ctx, s.Unit, err)
-		}
-	}
-	for _, w := range watchers {
-		if err := o.systemd.Restart(ctx, w); err != nil {
-			return err
 		}
 	}
 

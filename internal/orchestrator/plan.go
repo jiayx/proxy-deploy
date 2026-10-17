@@ -101,8 +101,8 @@ func (o *Orchestrator) Plan() *Plan {
 		}
 	}
 
-	siteAddr := loopback(0)
-	nextLoopback := 1
+	siteAddr, sitePlainAddr := loopback(0), loopback(1)
+	nextLoopback := 2
 	webHosts := map[string]bool{c.Domain: true}
 
 	// 网站：未配置时提供一个默认静态站，同时作为协议的伪装和回落
@@ -232,7 +232,7 @@ func (o *Orchestrator) Plan() *Plan {
 		p.Certs = append(p.Certs, config.Certificate{Name: name, CertPath: crt, KeyPath: key})
 	}
 	for _, svc := range p.Services {
-		svc.Runtime.SiteURL = "https://" + siteAddr
+		svc.Runtime.SiteURL = "http://" + sitePlainAddr
 		if cc, ok := svc.Adapter.(protocol.CertConsumer); ok && cc.NeedsCertificate() {
 			for i := range p.Certs {
 				if p.Certs[i].Name == svc.SNI {
@@ -247,23 +247,25 @@ func (o *Orchestrator) Plan() *Plan {
 		tcp = append(tcp, *tcpServers[port])
 	}
 	p.Caddy = caddy.Spec{
-		AdminSocket: o.layout.CaddyAdminSocket(),
-		StorageRoot: o.layout.CaddyDataDir(),
-		Issuer:      issuer,
-		CertNames:   certNames,
-		DefaultSNI:  c.Domain,
-		HTTPSPort:   c.Entry.HTTPSPort,
-		HTTPPort:    c.Entry.HTTPPort,
-		SiteAddr:    siteAddr,
-		TCPServers:  tcp,
-		UDPServers:  udpServers,
-		Sites:       sites,
+		AdminSocket:   o.layout.CaddyAdminSocket(),
+		StorageRoot:   o.layout.CaddyDataDir(),
+		Issuer:        issuer,
+		CertNames:     certNames,
+		DefaultSNI:    c.Domain,
+		HTTPSPort:     c.Entry.HTTPSPort,
+		HTTPPort:      c.Entry.HTTPPort,
+		SiteAddr:      siteAddr,
+		SitePlainAddr: sitePlainAddr,
+		TCPServers:    tcp,
+		UDPServers:    udpServers,
+		Sites:         sites,
 	}
 
 	// 记录部署会占用的全部端口，用于部署前检查和后续重新部署
 	add := func(network, addr string) { p.Ports = append(p.Ports, Port{network, addr}) }
 	add("tcp", fmt.Sprintf(":%d", c.Entry.HTTPPort))
 	add("tcp", siteAddr)
+	add("tcp", sitePlainAddr)
 	for _, s := range tcp {
 		add("tcp", fmt.Sprintf(":%d", s.Port))
 	}

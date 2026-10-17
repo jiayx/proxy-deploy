@@ -208,6 +208,8 @@ func (s Systemd) Enable(ctx context.Context, unit string) error { return s.run(c
 // Restart 重启服务；服务未运行时等同于启动。
 func (s Systemd) Restart(ctx context.Context, unit string) error { return s.run(ctx, "restart", unit) }
 
+func (s Systemd) Stop(ctx context.Context, unit string) error { return s.run(ctx, "stop", unit) }
+
 // ReloadOrRestart 运行中则 reload，否则启动。
 func (s Systemd) ReloadOrRestart(ctx context.Context, unit string) error {
 	return s.run(ctx, "reload-or-restart", unit)

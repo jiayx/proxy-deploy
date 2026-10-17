@@ -38,19 +38,15 @@ type Adapter interface {
 type Runtime struct {
 	ListenAddr string              // 服务端应监听的地址
 	Cert       *config.Certificate // 统一管理的证书；仅 CertConsumer 会拿到
-	SiteURL    string              // 内部网站地址，可用于伪装或回落
+	SiteURL    string              // 内部网站的明文 HTTP 地址（回环），可用于伪装或回落
 }
 
 // Service 描述一个服务端进程
 type Service struct {
-	// Args 第一个元素是可执行文件绝对路径。需要引用 Env 中的值时用 EnvRef，
-	// 这样敏感信息只写入权限为 0600 的环境文件，不出现在 unit 文件里
+	// Args 第一个元素是可执行文件绝对路径。不要放敏感信息：
+	// unit 文件是公开可读的，密码等应写在权限为 0600 的配置文件里
 	Args []string
-	Env  map[string]string
 }
-
-// EnvRef 返回在 Service.Args 中引用环境变量的写法
-func EnvRef(name string) string { return "${" + name + "}" }
 
 // Validator 由需要在规划阶段校验配置的协议实现
 type Validator interface {
@@ -58,7 +54,7 @@ type Validator interface {
 }
 
 // CertConsumer 由需要读取证书文件的协议实现。
-// 编排器会等证书签发后再启动它，并在证书续期后自动重启它。
+// 编排器会等证书签发后再启动它；续期后的重新加载由协议程序自己负责。
 type CertConsumer interface {
 	NeedsCertificate() bool
 }

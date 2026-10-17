@@ -2,7 +2,7 @@
 
 `proxyd` 是一个面向 Linux / systemd 的代理服务部署编排 CLI。它把 Caddy（含 caddy-l4）、代理协议服务和网站组合成一套部署：根据 YAML 配置规划公网入口、管理证书、安装二进制、生成配置与 systemd unit，并提供状态、日志、重启和卸载命令。
 
-当前支持 **AnyTLS（TCP）** 和 **Hysteria2（QUIC / UDP）**，网站支持静态文件和反向代理。支持系统级部署和 `--user` 用户级部署。
+当前支持 **AnyTLS（TCP）** 和 **Hysteria2（QUIC / UDP）**，服务端均由 sing-box 提供；网站支持静态文件和反向代理。支持系统级部署和 `--user` 用户级部署。
 
 ## 工作方式
 
@@ -15,15 +15,15 @@
                └─ 其他 SNI / 网站流量 → 内部 HTTPS 网站（127.0.0.1:20000）
 
 公网 UDP/443 → Hysteria2 直接监听，读取 Caddy 管理的证书
-               └─ 非 Hysteria 请求 → 伪装网站（默认使用内部 HTTPS 网站）
+               └─ 非 Hysteria 请求 → 伪装网站（默认反代内部网站）
 
 公网 TCP/80  → HTTP 跳转 HTTPS / ACME HTTP-01 验证
 ```
 
 - TCP 和 UDP 可以使用相同的端口号。TCP 协议通过不同 SNI 与网站共享入口，后端只监听回环地址；Caddy 用统一管理的证书终结客户端 TLS，再把明文转发到回环地址上的协议后端（例如 AnyTLS 的 sing-box inbound）。
 - 单个 UDP 协议独占某个端口时直接监听公网；规划器也已实现多个 QUIC 协议共享 UDP 端口时按 QUIC SNI 转发到回环后端的逻辑。目前注册的 UDP 协议只有 Hysteria2，尚未接入 TUIC 等其他协议。
-- 内部网站默认监听 `127.0.0.1:20000`，协议回环后端从 `20001` 起分配。网站支持 HTTP/1.1 和 HTTP/2。
-- Caddy 统一管理主域名、启用协议的 SNI 和网站 `host` 的证书。Hysteria2 启动前会等待证书文件就绪（最多 3 分钟），证书变化后由 systemd `.path` unit 触发重启；AnyTLS 的客户端 TLS 在 Caddy 终结，无需读取证书文件。
+- 内部网站以 HTTPS 监听 `127.0.0.1:20000`（供 TCP 入口转发，支持 HTTP/1.1 和 HTTP/2），同时以明文 HTTP 监听 `127.0.0.1:20001`（供协议伪装反代，保留原始 Host）；协议回环后端从 `20002` 起分配。
+- Caddy 统一管理主域名、启用协议的 SNI 和网站 `host` 的证书。Hysteria2 启动前会等待证书文件就绪（最多 3 分钟），续期后 sing-box 自动重新加载证书文件，无需重启服务；AnyTLS 的客户端 TLS 在 Caddy 终结，无需读取证书文件。
 
 ## 构建与部署
 
@@ -196,16 +196,15 @@ Caddy 的安装来源按以下优先级选择，并在安装后检查 TLS / QUIC
 3. 本项目 GitHub Releases 中 `caddy` release 的 `caddy-l4-<os>-<arch>` 预构建文件，用同时发布的 `.sha256` 文件校验。该 release 由 `.github/workflows/caddy.yml` 构建 linux amd64 / arm64，每月自动重建；也可手动触发并指定 Caddy 版本或额外插件（例如 DNS provider）。已安装的 `bin/caddy` 不会被自动替换。
 4. 下载失败时使用本机 `xcaddy build --with github.com/mholt/caddy-l4` 构建，需预先安装 xcaddy 和可用的 Go 工具链。
 
-协议程序从各自上游 GitHub Releases 下载，版本和各平台的 sha256 固定在适配器源码中（当前 sing-box `1.14.3`、Hysteria2 `app/v2.13.0`，支持 linux amd64 / arm64）。AnyTLS 使用 sing-box 作为服务端（anytls-go 是协议的参考实现，定位为演示）；基于 sing-box 的协议共用一份二进制，各自运行独立进程，校验不通过不会写入文件。程序按版本保存并通过符号链接使用；重复部署会复用已存在的版本，更新配置不会自动追踪上游最新版本。部署主机需能访问相应下载地址。
+协议程序从各自上游 GitHub Releases 下载，版本和各平台的 sha256 固定在适配器源码中（当前 sing-box `1.14.3`，支持 linux amd64 / arm64），校验不通过不会写入文件。所有协议都使用 sing-box 作为服务端：共用一份二进制，每个协议运行独立的进程和 unit，修改或重启某个协议不影响其他协议的连接。程序按版本保存并通过符号链接使用；重复部署会复用已存在的版本，更新配置不会自动追踪上游最新版本。部署主机需能访问相应下载地址。
 
 ```text
 <prefix>/
 ├── bin/                   # Caddy、协议程序链接及 versions/ 下的版本文件
 ├── etc/
 │   ├── caddy/config.json  # 生成的 Caddy 配置
-│   ├── hysteria2/config.yaml
-│   ├── anytls/config.json # sing-box 配置
-│   └── env/               # 协议服务环境文件
+│   ├── hysteria2/config.json # sing-box 配置
+│   └── anytls/config.json
 ├── var/
 │   ├── caddy/             # Caddy 证书、私钥及 CA 数据
 │   ├── caddy-admin.sock   # Caddy 管理接口 Unix socket
@@ -214,9 +213,9 @@ Caddy 的安装来源按以下优先级选择，并在安装后检查 TLS / QUIC
 └── manifest.json          # 服务、unit、端口及证书路径的安装清单
 ```
 
-生成的 Caddy 配置、协议配置和环境文件权限为 `0600`。`deploy.yaml` 由使用者保存，不会自动复制到安装目录。
+生成的 Caddy 配置和协议配置（含密码）权限为 `0600`。`deploy.yaml` 由使用者保存，不会自动复制到安装目录。
 
-systemd unit 在安装目录之外：系统模式写入 `/etc/systemd/system/`，用户模式写入 `$XDG_CONFIG_HOME/systemd/user/`（未设置时为 `~/.config/systemd/user/`）。主服务名为 `proxy-deploy-caddy.service`、`proxy-deploy-anytls.service` 和 `proxy-deploy-hysteria2.service`，证书监听还会生成对应的 `-cert.path` / `-cert.service`。
+systemd unit 在安装目录之外：系统模式写入 `/etc/systemd/system/`，用户模式写入 `$XDG_CONFIG_HOME/systemd/user/`（未设置时为 `~/.config/systemd/user/`）。主服务名为 `proxy-deploy-caddy.service`、`proxy-deploy-anytls.service` 和 `proxy-deploy-hysteria2.service`。
 
 `uninstall` 根据清单清理 unit，并递归删除整个 `<prefix>`，包括证书和默认网站；自定义前缀应专用于此部署。外部网站目录及存放在前缀之外的 YAML 和 CLI 二进制不由卸载命令删除。unit 名称固定，使用不同前缀不代表能在同一个 systemd 实例中同时运行多套部署。
 
@@ -232,4 +231,4 @@ pkg/paths/                 安装前缀和系统 / 用户模式路径
 pkg/system/                下载、解压、版本安装、文件写入和 systemctl 封装
 ```
 
-新增协议需实现 `protocol.Adapter` 并在 `cmd/proxyd/main.go` 注册；按需实现 `Validator`（规划阶段校验）和 `CertConsumer`（读取证书文件及续期重启）接口。以 sing-box 为服务端的协议可复用 `internal/protocol/singbox` 的安装和配置生成，只需提供 inbound 字段。编排器统一处理入口、证书和服务生命周期；`TransportBoth`（同时监听 TCP 和 UDP）当前仍会被规划器拒绝。
+新增协议需实现 `protocol.Adapter` 并在 `cmd/proxyd/main.go` 注册；按需实现 `Validator`（规划阶段校验）和 `CertConsumer`（读取证书文件，编排器会等证书签发后再启动）接口。以 sing-box 为服务端的协议可复用 `internal/protocol/singbox` 的安装和配置生成，只需提供 inbound 字段。编排器统一处理入口、证书和服务生命周期；`TransportBoth`（同时监听 TCP 和 UDP）当前仍会被规划器拒绝。

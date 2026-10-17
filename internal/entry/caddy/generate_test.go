@@ -19,17 +19,18 @@ func TestCertPaths(t *testing.T) {
 
 func TestGenerate(t *testing.T) {
 	data, err := Generate(Spec{
-		AdminSocket: "/v/admin.sock",
-		StorageRoot: "/v/caddy",
-		Issuer:      Issuer{Kind: "internal"},
-		CertNames:   []string{"a.com", "t.a.com"},
-		DefaultSNI:  "a.com",
-		HTTPSPort:   8443,
-		HTTPPort:    8080,
-		SiteAddr:    "127.0.0.1:20000",
-		TCPServers:  []TCPServer{{Port: 8443, Routes: []TCPRoute{{SNI: "t.a.com", Upstream: "127.0.0.1:20001"}}}},
-		UDPServers:  []UDPServer{{Port: 8443, Routes: []UDPRoute{{SNI: "u.a.com", Upstream: "127.0.0.1:20002"}}}},
-		Sites:       []Site{{Root: "/www"}, {Host: "app.a.com", Upstream: "127.0.0.1:3000"}},
+		AdminSocket:   "/v/admin.sock",
+		StorageRoot:   "/v/caddy",
+		Issuer:        Issuer{Kind: "internal"},
+		CertNames:     []string{"a.com", "t.a.com"},
+		DefaultSNI:    "a.com",
+		HTTPSPort:     8443,
+		HTTPPort:      8080,
+		SiteAddr:      "127.0.0.1:20000",
+		SitePlainAddr: "127.0.0.1:20001",
+		TCPServers:    []TCPServer{{Port: 8443, Routes: []TCPRoute{{SNI: "t.a.com", Upstream: "127.0.0.1:20001"}}}},
+		UDPServers:    []UDPServer{{Port: 8443, Routes: []UDPRoute{{SNI: "u.a.com", Upstream: "127.0.0.1:20002"}}}},
+		Sites:         []Site{{Root: "/www"}, {Host: "app.a.com", Upstream: "127.0.0.1:3000"}},
 	})
 	if err != nil {
 		t.Fatal(err)

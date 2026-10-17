@@ -53,7 +53,6 @@ func (l *Layout) VersionedBin(name, version string) string {
 	return filepath.Join(l.BinDir(), "versions", name+"-"+strings.NewReplacer("/", "-", " ", "-").Replace(version))
 }
 
-func (l *Layout) EnvFile(unit string) string     { return filepath.Join(l.EtcDir(), "env", unit+".env") }
 func (l *Layout) ProtocolDir(name string) string { return filepath.Join(l.EtcDir(), name) }
 func (l *Layout) ProtocolConfig(name string) string {
 	return filepath.Join(l.ProtocolDir(name), "config.yaml")
