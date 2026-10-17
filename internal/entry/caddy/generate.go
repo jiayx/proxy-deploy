@@ -44,12 +44,10 @@ func CertPaths(storageRoot string, iss Issuer, name string) (crt, key string) {
 	return dir + "/" + name + ".crt", dir + "/" + name + ".key"
 }
 
-// TCPRoute 是 TCP 入口上的一条 SNI 路由。Caddy 用统一证书终结 TLS 后转发到 Upstream
+// TCPRoute 是 TCP 入口上的一条 SNI 路由。Caddy 用统一证书终结 TLS 后把明文转发到 Upstream
 type TCPRoute struct {
 	SNI      string
 	Upstream string
-	// ReencryptUpstream 表示后端自身要求 TLS（例如 anytls-go），Caddy 以 TLS 连接后端
-	ReencryptUpstream bool
 }
 
 // TCPServer 是一个 TCP 入口端口。未匹配任何路由的流量交给内部网站
@@ -155,16 +153,11 @@ func layer4App(s Spec) obj {
 	for _, srv := range s.TCPServers {
 		var routes []obj
 		for _, r := range srv.Routes {
-			upstream := obj{"dial": []string{r.Upstream}}
-			if r.ReencryptUpstream {
-				// 后端使用自签证书，只在回环地址上连接，跳过校验
-				upstream["tls"] = obj{"insecure_skip_verify": true}
-			}
 			routes = append(routes, obj{
 				"match": []obj{{"tls": obj{"sni": []string{r.SNI}}}},
 				"handle": []obj{
 					{"handler": "tls"},
-					{"handler": "proxy", "upstreams": []obj{upstream}},
+					{"handler": "proxy", "upstreams": []obj{{"dial": []string{r.Upstream}}}},
 				},
 			})
 		}

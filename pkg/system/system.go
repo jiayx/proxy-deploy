@@ -2,11 +2,14 @@
 package system
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -33,7 +36,7 @@ func Download(ctx context.Context, url, sum, dest string, mode os.FileMode) erro
 	return WriteFile(dest, data, mode)
 }
 
-// DownloadAndExtract 下载 zip 包并校验 sha256，从中提取指定文件名的条目到 dest，幂等。
+// DownloadAndExtract 下载 zip 或 tar.gz 包并校验 sha256，从中提取指定文件名的条目到 dest，幂等。
 func DownloadAndExtract(ctx context.Context, url, sum, entryName, dest string, mode os.FileMode) error {
 	if _, err := os.Stat(dest); err == nil {
 		return nil
@@ -42,9 +45,22 @@ func DownloadAndExtract(ctx context.Context, url, sum, entryName, dest string, m
 	if err != nil {
 		return err
 	}
+	var entry []byte
+	if strings.HasSuffix(url, ".tar.gz") {
+		entry, err = extractTarGz(data, entryName)
+	} else {
+		entry, err = extractZip(data, entryName)
+	}
+	if err != nil {
+		return fmt.Errorf("%s: %w", url, err)
+	}
+	return WriteFile(dest, entry, mode)
+}
+
+func extractZip(data []byte, entryName string) ([]byte, error) {
 	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
-		return fmt.Errorf("open zip from %s: %w", url, err)
+		return nil, fmt.Errorf("open zip: %w", err)
 	}
 	for _, f := range zr.File {
 		if filepath.Base(f.Name) != entryName {
@@ -52,16 +68,32 @@ func DownloadAndExtract(ctx context.Context, url, sum, entryName, dest string, m
 		}
 		rc, err := f.Open()
 		if err != nil {
-			return fmt.Errorf("open zip entry %s: %w", f.Name, err)
+			return nil, fmt.Errorf("open zip entry %s: %w", f.Name, err)
 		}
-		entry, err := io.ReadAll(rc)
-		rc.Close()
-		if err != nil {
-			return fmt.Errorf("extract %s: %w", entryName, err)
-		}
-		return WriteFile(dest, entry, mode)
+		defer rc.Close()
+		return io.ReadAll(rc)
 	}
-	return fmt.Errorf("entry %q not found in zip from %s", entryName, url)
+	return nil, fmt.Errorf("entry %q not found in archive", entryName)
+}
+
+func extractTarGz(data []byte, entryName string) ([]byte, error) {
+	gz, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("open tar.gz: %w", err)
+	}
+	tr := tar.NewReader(gz)
+	for {
+		h, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			return nil, fmt.Errorf("entry %q not found in archive", entryName)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read tar.gz: %w", err)
+		}
+		if h.Typeflag == tar.TypeReg && filepath.Base(h.Name) == entryName {
+			return io.ReadAll(tr)
+		}
+	}
 }
 
 // FetchChecksum 读取 sha256sum 格式的校验文件，返回第一个字段

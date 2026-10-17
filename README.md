@@ -20,7 +20,7 @@
 公网 TCP/80  → HTTP 跳转 HTTPS / ACME HTTP-01 验证
 ```
 
-- TCP 和 UDP 可以使用相同的端口号。TCP 协议通过不同 SNI 与网站共享入口，后端只监听回环地址；AnyTLS 后端自身使用自签证书，Caddy 到该后端的 TLS 连接跳过证书校验，客户端看到的是 Caddy 管理的证书。
+- TCP 和 UDP 可以使用相同的端口号。TCP 协议通过不同 SNI 与网站共享入口，后端只监听回环地址；Caddy 用统一管理的证书终结客户端 TLS，再把明文转发到回环地址上的协议后端（例如 AnyTLS 的 sing-box inbound）。
 - 单个 UDP 协议独占某个端口时直接监听公网；规划器也已实现多个 QUIC 协议共享 UDP 端口时按 QUIC SNI 转发到回环后端的逻辑。目前注册的 UDP 协议只有 Hysteria2，尚未接入 TUIC 等其他协议。
 - 内部网站默认监听 `127.0.0.1:20000`，协议回环后端从 `20001` 起分配。网站支持 HTTP/1.1 和 HTTP/2。
 - Caddy 统一管理主域名、启用协议的 SNI 和网站 `host` 的证书。Hysteria2 启动前会等待证书文件就绪（最多 3 分钟），证书变化后由 systemd `.path` unit 触发重启；AnyTLS 的客户端 TLS 在 Caddy 终结，无需读取证书文件。
@@ -105,7 +105,7 @@ web:
 | `protocols[].port` | 公网端口，默认使用 `entry.https_port` |
 | `protocols[].sni` | 默认 `<name>.<domain>`；TCP 协议的 SNI 必须与主域名及网站 `host` 不同 |
 | `protocols[].config.password` | 两种协议均必填，不能是占位值 `change-me` |
-| `anytls` 的 `config.padding_scheme` | 可选，传给 anytls-server 的 `-padding-scheme` 参数 |
+| `anytls` 的 `config.padding_scheme` | 可选，填充方案，多行字符串或字符串列表，每行一条规则；格式同 sing-box anytls inbound |
 | `hysteria2` 的 `config.masquerade_url` | 可选，覆盖默认的内部伪装网站地址 |
 
 每种协议只能配置一个实例（重复的 `name` 会被拒绝）：二进制、配置路径和 systemd unit 都按协议名标识。配置中出现未知字段（例如拼错的字段名）时加载直接报错。
@@ -196,7 +196,7 @@ Caddy 的安装来源按以下优先级选择，并在安装后检查 TLS / QUIC
 3. 本项目 GitHub Releases 中 `caddy` release 的 `caddy-l4-<os>-<arch>` 预构建文件，用同时发布的 `.sha256` 文件校验。该 release 由 `.github/workflows/caddy.yml` 构建 linux amd64 / arm64，每月自动重建；也可手动触发并指定 Caddy 版本或额外插件（例如 DNS provider）。已安装的 `bin/caddy` 不会被自动替换。
 4. 下载失败时使用本机 `xcaddy build --with github.com/mholt/caddy-l4` 构建，需预先安装 xcaddy 和可用的 Go 工具链。
 
-协议程序从各自上游 GitHub Releases 下载，版本和各平台的 sha256 固定在适配器源码中（当前 AnyTLS `0.0.13`、Hysteria2 `app/v2.13.0`，支持 linux amd64 / arm64），校验不通过不会写入文件。程序按版本保存并通过符号链接使用；重复部署会复用已存在的版本，更新配置不会自动追踪上游最新版本。部署主机需能访问相应下载地址。
+协议程序从各自上游 GitHub Releases 下载，版本和各平台的 sha256 固定在适配器源码中（当前 sing-box `1.14.3`、Hysteria2 `app/v2.13.0`，支持 linux amd64 / arm64）。AnyTLS 使用 sing-box 作为服务端（anytls-go 是协议的参考实现，定位为演示）；基于 sing-box 的协议共用一份二进制，各自运行独立进程，校验不通过不会写入文件。程序按版本保存并通过符号链接使用；重复部署会复用已存在的版本，更新配置不会自动追踪上游最新版本。部署主机需能访问相应下载地址。
 
 ```text
 <prefix>/
@@ -204,7 +204,8 @@ Caddy 的安装来源按以下优先级选择，并在安装后检查 TLS / QUIC
 ├── etc/
 │   ├── caddy/config.json  # 生成的 Caddy 配置
 │   ├── hysteria2/config.yaml
-│   └── env/               # 协议服务环境文件（含 AnyTLS 密码）
+│   ├── anytls/config.json # sing-box 配置
+│   └── env/               # 协议服务环境文件
 ├── var/
 │   ├── caddy/             # Caddy 证书、私钥及 CA 数据
 │   ├── caddy-admin.sock   # Caddy 管理接口 Unix socket
@@ -226,9 +227,9 @@ cmd/proxyd/                CLI 命令、选项和输出
 internal/config/           YAML 类型、默认值、基础校验和示例
 internal/orchestrator/     入口规划、冲突检查、部署、清单和 systemd 管理
 internal/entry/caddy/      Caddy 安装、模块检查和 JSON 配置生成
-internal/protocol/         协议接口、注册表及 anytls / hysteria2 适配器
+internal/protocol/         协议接口、注册表及 anytls / hysteria2 适配器；singbox/ 为共用的 sing-box 安装与配置
 pkg/paths/                 安装前缀和系统 / 用户模式路径
 pkg/system/                下载、解压、版本安装、文件写入和 systemctl 封装
 ```
 
-新增协议需实现 `protocol.Adapter` 并在 `cmd/proxyd/main.go` 注册；按需实现 `Validator`（规划阶段校验）、`CertConsumer`（读取证书文件及续期重启）和 `TLSBackend`（TCP 后端需要 TLS）接口。编排器统一处理入口、证书和服务生命周期；`TransportBoth`（同时监听 TCP 和 UDP）当前仍会被规划器拒绝。
+新增协议需实现 `protocol.Adapter` 并在 `cmd/proxyd/main.go` 注册；按需实现 `Validator`（规划阶段校验）和 `CertConsumer`（读取证书文件及续期重启）接口。以 sing-box 为服务端的协议可复用 `internal/protocol/singbox` 的安装和配置生成，只需提供 inbound 字段。编排器统一处理入口、证书和服务生命周期；`TransportBoth`（同时监听 TCP 和 UDP）当前仍会被规划器拒绝。

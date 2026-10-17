@@ -49,7 +49,7 @@ func TestPlanDefault(t *testing.T) {
 		t.Fatalf("want one TCP server on 443, got %+v", p.Caddy.TCPServers)
 	}
 	routes := p.Caddy.TCPServers[0].Routes
-	if len(routes) != 1 || routes[0].SNI != "anytls.example.com" || routes[0].Upstream != "127.0.0.1:20001" || !routes[0].ReencryptUpstream {
+	if len(routes) != 1 || routes[0].SNI != "anytls.example.com" || routes[0].Upstream != "127.0.0.1:20001" {
 		t.Fatalf("unexpected anytls route: %+v", routes)
 	}
 	if len(p.Caddy.UDPServers) != 0 {

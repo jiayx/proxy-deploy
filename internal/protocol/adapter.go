@@ -63,12 +63,6 @@ type CertConsumer interface {
 	NeedsCertificate() bool
 }
 
-// TLSBackend 由自身强制 TLS 的 TCP 协议实现。
-// Caddy 终结客户端 TLS 后，会以 TLS（跳过校验）连接这类后端。
-type TLSBackend interface {
-	BackendTLS() bool
-}
-
 // ClientContext 是客户端连接所需的入口信息，由编排器根据端口规划提供
 type ClientContext struct {
 	Host     string // 客户端连接的服务器地址

@@ -1,6 +1,9 @@
 package system
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -65,5 +68,25 @@ func TestInstallVersioned(t *testing.T) {
 	}
 	if target, _ := os.Readlink(link); target != "versions/tool-1" {
 		t.Fatalf("link should be relative, got %s", target)
+	}
+}
+
+func TestExtractTarGz(t *testing.T) {
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	for name, body := range map[string]string{"pkg/README": "doc", "pkg/sing-box": "bin"} {
+		tw.WriteHeader(&tar.Header{Name: name, Mode: 0755, Size: int64(len(body)), Typeflag: tar.TypeReg})
+		tw.Write([]byte(body))
+	}
+	tw.Close()
+	gz.Close()
+
+	got, err := extractTarGz(buf.Bytes(), "sing-box")
+	if err != nil || string(got) != "bin" {
+		t.Fatalf("got %q, %v", got, err)
+	}
+	if _, err := extractTarGz(buf.Bytes(), "missing"); err == nil {
+		t.Fatal("missing entry should fail")
 	}
 }

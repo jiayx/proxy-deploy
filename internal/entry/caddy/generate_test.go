@@ -27,7 +27,7 @@ func TestGenerate(t *testing.T) {
 		HTTPSPort:   8443,
 		HTTPPort:    8080,
 		SiteAddr:    "127.0.0.1:20000",
-		TCPServers:  []TCPServer{{Port: 8443, Routes: []TCPRoute{{SNI: "t.a.com", Upstream: "127.0.0.1:20001", ReencryptUpstream: true}}}},
+		TCPServers:  []TCPServer{{Port: 8443, Routes: []TCPRoute{{SNI: "t.a.com", Upstream: "127.0.0.1:20001"}}}},
 		UDPServers:  []UDPServer{{Port: 8443, Routes: []UDPRoute{{SNI: "u.a.com", Upstream: "127.0.0.1:20002"}}}},
 		Sites:       []Site{{Root: "/www"}, {Host: "app.a.com", Upstream: "127.0.0.1:3000"}},
 	})
@@ -42,7 +42,6 @@ func TestGenerate(t *testing.T) {
 	for _, want := range []string{
 		`"listen": "unix//v/admin.sock"`,
 		`"install_trust": false`,
-		`"insecure_skip_verify": true`,
 		`"udp/127.0.0.1:20002"`,
 		`"udp/:8443"`,
 		`https://{http.request.host}:8443{http.request.uri}`,

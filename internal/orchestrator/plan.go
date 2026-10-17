@@ -196,12 +196,8 @@ func (o *Orchestrator) Plan() *Plan {
 			svc.ViaEntry = true
 			svc.Runtime.ListenAddr = loopback(nextLoopback)
 			nextLoopback++
-			reencrypt := false
-			if t, ok := a.(protocol.TLSBackend); ok {
-				reencrypt = t.BackendTLS()
-			}
 			srv := tcpServer(port)
-			srv.Routes = append(srv.Routes, caddy.TCPRoute{SNI: sni, Upstream: svc.Runtime.ListenAddr, ReencryptUpstream: reencrypt})
+			srv.Routes = append(srv.Routes, caddy.TCPRoute{SNI: sni, Upstream: svc.Runtime.ListenAddr})
 		} else {
 			if _, ok := udpByPort[port]; !ok {
 				udpOrder = append(udpOrder, port)
