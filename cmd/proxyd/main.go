@@ -16,6 +16,8 @@ import (
 	"github.com/jiayx/proxy-deploy/internal/protocol"
 	"github.com/jiayx/proxy-deploy/internal/protocol/anytls"
 	"github.com/jiayx/proxy-deploy/internal/protocol/hysteria2"
+	"github.com/jiayx/proxy-deploy/internal/protocol/ss2022"
+	"github.com/jiayx/proxy-deploy/internal/protocol/tuic"
 	"github.com/jiayx/proxy-deploy/internal/protocol/vlessreality"
 	"github.com/jiayx/proxy-deploy/pkg/paths"
 )
@@ -154,10 +156,13 @@ func run(ctx context.Context, cmd string, rest []string, layout *paths.Layout,
 	if err != nil {
 		return err
 	}
+	// 注册顺序决定协议后端的回环端口，新协议只能加在末尾
 	reg := protocol.NewRegistry()
 	reg.Register(hysteria2.New(layout))
 	reg.Register(anytls.New(layout))
 	reg.Register(vlessreality.New(layout))
+	reg.Register(tuic.New(layout))
+	reg.Register(ss2022.New(layout))
 	orch := orchestrator.New(reg, cfg, layout)
 	plan := orch.Plan()
 
@@ -240,18 +245,25 @@ func printPlan(p *orchestrator.Plan) {
 		fmt.Printf("  UDP/%-5d 网关  %s\n", s.Port, strings.Join(parts, "；"))
 	}
 	fmt.Printf("  TCP/%-5d HTTP 跳转 HTTPS / ACME 验证\n", p.Caddy.HTTPPort)
+	for _, s := range p.Services {
+		if s.Direct {
+			fmt.Printf("  %s/%d %s 直接监听（没有 TLS，不经网关）\n", strings.ToUpper(s.Network), s.PublicPort, s.Cfg.Name)
+		}
+	}
 
 	fmt.Println("协议:")
 	for _, s := range p.Services {
-		cert := "由网关终结 TLS"
+		cert, sni := "由网关终结 TLS", s.SNI
 		switch {
+		case s.Direct:
+			cert, sni = "无 TLS，直接监听", "—"
 		case s.Runtime.Cert != nil:
 			cert = "读取证书 " + s.Runtime.Cert.Name
 		case s.Passthrough:
 			cert = "自行处理 TLS（网关透传）"
 		}
 		fmt.Printf("  %-14s %s/%d  SNI %-28s 监听 %-16s %s\n",
-			s.Cfg.Name, s.Network, s.PublicPort, s.SNI, s.Runtime.ListenAddr, cert)
+			s.Cfg.Name, s.Network, s.PublicPort, sni, s.Runtime.ListenAddr, cert)
 	}
 
 	fmt.Printf("证书（%s）:\n", p.Caddy.Issuer.Kind)

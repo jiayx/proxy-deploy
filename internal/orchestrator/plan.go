@@ -54,6 +54,7 @@ type Service struct {
 	Network     string // tcp | udp
 	PublicPort  int
 	ViaEntry    bool // 流量经过网关转发
+	Direct      bool // 直接监听公网端口（没有 TLS，网关无法分流）
 	Passthrough bool // 网关不终结 TLS，原样转发（协议自己处理 TLS）
 	Runtime     protocol.Runtime
 }
@@ -65,6 +66,14 @@ type Plan struct {
 	Ports     []Port
 	Certs     []config.Certificate
 	Conflicts []Conflict
+}
+
+// networks 返回服务监听的传输层（tcp+udp 的协议两者都有）
+func (s *Service) networks() []string {
+	if s.Network == "tcp+udp" {
+		return []string{"tcp", "udp"}
+	}
+	return []string{s.Network}
 }
 
 func loopback(n int) string { return fmt.Sprintf("127.0.0.1:%d", loopbackBase+n) }
@@ -102,10 +111,10 @@ func (o *Orchestrator) Plan() *Plan {
 	}
 
 	siteAddr, sitePlainAddr := loopback(0), loopback(1)
-	// 协议后端的回环端口按协议名固定（所有已注册协议按名称排序依次分配），
-	// 启用、停用或新增其他协议不会改变已有协议的端口，也就不会让它们重启
+	// 协议后端的回环端口按协议的注册顺序固定分配：启用、停用其他协议，
+	// 或新增协议类型（注册在末尾）都不会改变已有协议的端口，也就不会让它们重启
 	protocolPort := map[string]int{}
-	for i, name := range o.registry.Names() {
+	for i, name := range o.registry.Ordered() {
 		protocolPort[name] = 2 + i
 	}
 	webHosts := map[string]bool{c.Domain: true}
@@ -141,6 +150,7 @@ func (o *Orchestrator) Plan() *Plan {
 	tcpServer(c.Entry.HTTPSPort) // 主入口总是存在，承载网站
 
 	sniOwner := map[string]string{}
+	var direct []*Service
 	udpByPort := map[int][]*Service{}
 	var udpOrder []int
 
@@ -159,6 +169,17 @@ func (o *Orchestrator) Plan() *Plan {
 				conflict(pc.Name, err.Error(), "")
 				continue
 			}
+		}
+		if d, ok := a.(protocol.DirectListener); ok && d.ListenDirect() {
+			if pc.Port == 0 {
+				conflict(pc.Name, "没有 TLS，网关无法按 SNI 分流，需要单独的端口", "设置 port，例如 8388")
+				continue
+			}
+			svc := &Service{Cfg: pc, Adapter: a, PublicPort: pc.Port, Network: a.Transport().String(), Direct: true}
+			svc.Runtime.ListenAddr = fmt.Sprintf(":%d", pc.Port)
+			direct = append(direct, svc)
+			p.Services = append(p.Services, svc)
+			continue
 		}
 		sni := pc.SNI
 		if sni == "" {
@@ -238,6 +259,25 @@ func (o *Orchestrator) Plan() *Plan {
 		udpServers = append(udpServers, srv)
 	}
 
+	// 直接监听的协议独占端口，不能与入口和其他协议共用
+	used := map[Port]string{{"tcp", fmt.Sprint(c.Entry.HTTPPort)}: "HTTP 入口"}
+	for _, port := range tcpOrder {
+		used[Port{"tcp", fmt.Sprint(port)}] = "TCP 网关"
+	}
+	for _, srv := range udpServers {
+		used[Port{"udp", fmt.Sprint(srv.Port)}] = "UDP 网关"
+	}
+	for _, svc := range direct {
+		for _, network := range svc.networks() {
+			key := Port{network, fmt.Sprint(svc.PublicPort)}
+			if owner, ok := used[key]; ok {
+				conflict(svc.Cfg.Name, fmt.Sprintf("%s/%d 已被%s使用", strings.ToUpper(network), svc.PublicPort, owner), "换一个端口")
+				break
+			}
+			used[key] = svc.Cfg.Name
+		}
+	}
+
 	for _, name := range certNames {
 		crt, key := caddy.CertPaths(o.layout.CaddyDataDir(), issuer, name)
 		p.Certs = append(p.Certs, config.Certificate{Name: name, CertPath: crt, KeyPath: key})
@@ -286,7 +326,9 @@ func (o *Orchestrator) Plan() *Plan {
 		add("udp", fmt.Sprintf(":%d", s.Port))
 	}
 	for _, svc := range p.Services {
-		add(svc.Network, svc.Runtime.ListenAddr)
+		for _, network := range svc.networks() {
+			add(network, svc.Runtime.ListenAddr)
+		}
 	}
 	sort.Slice(p.Ports, func(i, j int) bool {
 		if p.Ports[i].Network != p.Ports[j].Network {
@@ -311,8 +353,12 @@ func (o *Orchestrator) ClientConfigs(p *Plan) ([]*config.ClientConfig, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", s.Cfg.Name, err)
 		}
-		cc.Notes = append(cc.Notes, fmt.Sprintf("%s/%d，SNI %s", strings.ToUpper(s.Network), s.PublicPort, s.SNI))
-		if insecure {
+		if s.Direct {
+			cc.Notes = append(cc.Notes, fmt.Sprintf("%s/%d，直接连接（不经网关）", strings.ToUpper(s.Network), s.PublicPort))
+		} else {
+			cc.Notes = append(cc.Notes, fmt.Sprintf("%s/%d，SNI %s", strings.ToUpper(s.Network), s.PublicPort, s.SNI))
+		}
+		if insecure && !s.Direct && !s.Passthrough {
 			cc.Notes = append(cc.Notes, "证书由内部 CA 签发，客户端需要跳过证书校验")
 		}
 		out = append(out, cc)

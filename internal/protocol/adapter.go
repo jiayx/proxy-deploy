@@ -66,6 +66,12 @@ type TLSPassthrough interface {
 	PassthroughTLS() bool
 }
 
+// DirectListener 由不能经网关按 SNI 分流的协议实现（没有 TLS，例如 Shadowsocks）：
+// 协议直接监听公网端口，需要单独的端口，客户端真实地址对它可见
+type DirectListener interface {
+	ListenDirect() bool
+}
+
 // SNIDefaulter 由默认 SNI 不是 <name>.<domain> 的协议实现，例如 Reality 使用伪装目标网站的域名
 type SNIDefaulter interface {
 	DefaultSNI() string
@@ -126,6 +132,7 @@ func StringOption(cfg *config.ProtocolConfig, key string) string {
 // Registry 管理所有已注册的协议适配器
 type Registry struct {
 	adapters map[string]Adapter
+	order    []string // 注册顺序
 }
 
 func NewRegistry() *Registry {
@@ -133,7 +140,16 @@ func NewRegistry() *Registry {
 }
 
 func (r *Registry) Register(a Adapter) {
+	if _, ok := r.adapters[a.Name()]; !ok {
+		r.order = append(r.order, a.Name())
+	}
 	r.adapters[a.Name()] = a
+}
+
+// Ordered 返回按注册顺序排列的协议名。新协议应注册在末尾，
+// 依赖这个顺序分配的资源（如回环端口）对已有协议保持不变
+func (r *Registry) Ordered() []string {
+	return append([]string(nil), r.order...)
 }
 
 func (r *Registry) Get(name string) (Adapter, bool) {

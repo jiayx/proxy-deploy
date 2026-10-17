@@ -98,7 +98,8 @@ func (c *DeployConfig) Validate() error {
 // Example 返回一个带注释的示例配置，协议凭据随机生成
 func Example() string {
 	privateKey, _ := secrets.RealityKeyPair()
-	return fmt.Sprintf(exampleTemplate, secrets.Password(), secrets.Password(), secrets.UUID(), privateKey, secrets.ShortID())
+	return fmt.Sprintf(exampleTemplate, secrets.Password(), secrets.Password(), secrets.UUID(), privateKey, secrets.ShortID(),
+		secrets.UUID(), secrets.Password(), secrets.Key(16))
 }
 
 const exampleTemplate = `# proxy-deploy 配置示例
@@ -135,6 +136,20 @@ protocols:
       private_key: "%s"     # 公钥由它推导，客户端链接里会给出
       short_id: "%s"
       # handshake: www.microsoft.com:443   # 伪装握手的目标，默认是 sni 的 443 端口
+
+  - name: tuic              # UDP/QUIC，与 hysteria2 共享 UDP/<https_port>，网关按 QUIC SNI 分流
+    enabled: false
+    config:
+      uuid: "%s"
+      password: "%s"
+      # congestion_control: bbr        # bbr | cubic | new_reno
+
+  - name: ss2022            # Shadowsocks 2022，没有 TLS，直接监听单独的端口（TCP 和 UDP）
+    enabled: false
+    port: 8388              # 必填，不能与入口端口相同；需在防火墙放行 TCP 和 UDP
+    config:
+      # method: 2022-blake3-aes-128-gcm   # 或 2022-blake3-aes-256-gcm / 2022-blake3-chacha20-poly1305（密钥 32 字节）
+      password: "%s"
 
 web:
   - name: site

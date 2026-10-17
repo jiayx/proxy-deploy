@@ -1,6 +1,8 @@
 package orchestrator
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -8,6 +10,8 @@ import (
 	"github.com/jiayx/proxy-deploy/internal/protocol"
 	"github.com/jiayx/proxy-deploy/internal/protocol/anytls"
 	"github.com/jiayx/proxy-deploy/internal/protocol/hysteria2"
+	"github.com/jiayx/proxy-deploy/internal/protocol/ss2022"
+	"github.com/jiayx/proxy-deploy/internal/protocol/tuic"
 	"github.com/jiayx/proxy-deploy/internal/protocol/vlessreality"
 	"github.com/jiayx/proxy-deploy/pkg/paths"
 	"github.com/jiayx/proxy-deploy/pkg/secrets"
@@ -23,6 +27,8 @@ func newOrch(t *testing.T, cfg *config.DeployConfig) *Orchestrator {
 	reg.Register(hysteria2.New(layout))
 	reg.Register(anytls.New(layout))
 	reg.Register(vlessreality.New(layout))
+	reg.Register(tuic.New(layout))
+	reg.Register(ss2022.New(layout))
 	return New(reg, cfg, layout)
 }
 
@@ -52,7 +58,7 @@ func TestPlanDefault(t *testing.T) {
 		t.Fatalf("want one TCP server on 443, got %+v", p.Caddy.TCPServers)
 	}
 	routes := p.Caddy.TCPServers[0].Routes
-	if len(routes) != 1 || routes[0].Name != "anytls" || routes[0].SNI != "anytls.example.com" || routes[0].Upstream != "127.0.0.1:20002" {
+	if len(routes) != 1 || routes[0].Name != "anytls" || routes[0].SNI != "anytls.example.com" || routes[0].Upstream != "127.0.0.1:20003" {
 		t.Fatalf("unexpected anytls route: %+v", routes)
 	}
 
@@ -61,7 +67,7 @@ func TestPlanDefault(t *testing.T) {
 		byName[s.Cfg.Name] = s
 	}
 	hy := byName["hysteria2"]
-	if !hy.ViaEntry || hy.Runtime.ListenAddr != "127.0.0.1:20003" || hy.Runtime.SiteURL != "http://127.0.0.1:20001" || hy.Runtime.Cert == nil || hy.Runtime.Cert.Name != "hysteria2.example.com" {
+	if !hy.ViaEntry || hy.Runtime.ListenAddr != "127.0.0.1:20002" || hy.Runtime.SiteURL != "http://127.0.0.1:20001" || hy.Runtime.Cert == nil || hy.Runtime.Cert.Name != "hysteria2.example.com" {
 		t.Fatalf("unexpected hysteria2 plan: %+v %+v", hy, hy.Runtime)
 	}
 	if byName["anytls"].Runtime.Cert != nil {
@@ -80,7 +86,7 @@ func TestPlanDefault(t *testing.T) {
 	for _, port := range p.Ports {
 		ports = append(ports, port.Network+port.Addr)
 	}
-	want := "tcp127.0.0.1:20000,tcp127.0.0.1:20001,tcp127.0.0.1:20002,tcp:443,tcp:80,udp127.0.0.1:20000,udp127.0.0.1:20003,udp:443"
+	want := "tcp127.0.0.1:20000,tcp127.0.0.1:20001,tcp127.0.0.1:20003,tcp:443,tcp:80,udp127.0.0.1:20000,udp127.0.0.1:20002,udp:443"
 	if got := strings.Join(ports, ","); got != want {
 		t.Fatalf("ports:\n got %s\nwant %s", got, want)
 	}
@@ -108,16 +114,9 @@ func TestPlanConflicts(t *testing.T) {
 	}
 }
 
-// fakeUDP 是测试用的第二个 UDP 协议
-type fakeUDP struct{ protocol.Adapter }
-
-func (fakeUDP) Name() string                  { return "tuic" }
-func (fakeUDP) Transport() protocol.Transport { return protocol.TransportUDP }
-
 func TestPlanUDPThroughGateway(t *testing.T) {
-	o := newOrch(t, baseConfig(proto("hysteria2"), proto("tuic")))
-	o.registry.Register(fakeUDP{})
-	p := o.Plan()
+	tuicProto := proto("tuic", func(p *config.ProtocolConfig) { p.Config["uuid"] = secrets.UUID() })
+	p := newOrch(t, baseConfig(proto("hysteria2"), tuicProto)).Plan()
 	if len(p.Conflicts) != 0 {
 		t.Fatalf("UDP protocols should share the entry port, got %+v", p.Conflicts)
 	}
@@ -128,7 +127,7 @@ func TestPlanUDPThroughGateway(t *testing.T) {
 	for _, r := range p.Caddy.UDPServers[0].Routes {
 		routes = append(routes, r.Name+"="+r.SNI+"→"+r.Upstream)
 	}
-	want := "hysteria2=hysteria2.example.com→127.0.0.1:20003,tuic=tuic.example.com→127.0.0.1:20004"
+	want := "hysteria2=hysteria2.example.com→127.0.0.1:20002,tuic=tuic.example.com→127.0.0.1:20005"
 	if got := strings.Join(routes, ","); got != want {
 		t.Fatalf("routes:\n got %s\nwant %s", got, want)
 	}
@@ -188,6 +187,59 @@ func TestPlanLoopbackPortsStable(t *testing.T) {
 	for name, addr := range before {
 		if after[name] != addr {
 			t.Fatalf("enabling another protocol moved %s from %s to %s", name, addr, after[name])
+		}
+	}
+}
+
+// 示例配置中的协议全部启用后应能直接部署：init-config 生成的凭据都能通过校验，端口不冲突
+func TestPlanExampleAllProtocols(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "deploy.yaml")
+	os.WriteFile(path, []byte(strings.ReplaceAll(config.Example(), "enabled: false", "enabled: true")), 0600)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Certificates = config.CertificateConfig{Provider: "internal"}
+	p := newOrch(t, cfg).Plan()
+	if len(p.Conflicts) != 0 {
+		t.Fatalf("example config with every protocol enabled has conflicts: %+v", p.Conflicts)
+	}
+	if len(p.Services) != 5 {
+		t.Fatalf("want 5 services, got %d", len(p.Services))
+	}
+}
+
+func TestPlanDirectListen(t *testing.T) {
+	ss := func(port int) config.ProtocolConfig {
+		return config.ProtocolConfig{Name: "ss2022", Enabled: true, Port: port, Config: map[string]any{"password": secrets.Key(16)}}
+	}
+	p := newOrch(t, baseConfig(proto("anytls"), ss(8388))).Plan()
+	if len(p.Conflicts) != 0 {
+		t.Fatalf("unexpected conflicts: %+v", p.Conflicts)
+	}
+	svc := p.Services[1]
+	if !svc.Direct || svc.ViaEntry || svc.Network != "tcp+udp" || svc.Runtime.ListenAddr != ":8388" || svc.Runtime.Cert != nil {
+		t.Fatalf("ss2022 should listen directly on TCP+UDP 8388: %+v", svc)
+	}
+	var ports []string
+	for _, port := range p.Ports {
+		if port.Addr == ":8388" {
+			ports = append(ports, port.Network)
+		}
+	}
+	if strings.Join(ports, ",") != "tcp,udp" {
+		t.Fatalf("direct protocol should reserve both TCP and UDP, got %v", ports)
+	}
+	for _, r := range p.Caddy.TCPServers[0].Routes {
+		if r.Name == "ss2022" {
+			t.Fatal("direct protocol must not get a gateway route")
+		}
+	}
+
+	for port, want := range map[int]string{0: "单独的端口", 443: "网关", 80: "HTTP 入口"} {
+		p := newOrch(t, baseConfig(ss(port))).Plan()
+		if len(p.Conflicts) != 1 || !strings.Contains(p.Conflicts[0].Reason, want) {
+			t.Errorf("port %d: want conflict containing %q, got %+v", port, want, p.Conflicts)
 		}
 	}
 }

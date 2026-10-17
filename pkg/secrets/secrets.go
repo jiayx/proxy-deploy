@@ -55,3 +55,11 @@ func ShortID() string {
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
 }
+
+// Key 生成 n 字节随机密钥的标准 base64 编码，用作 Shadowsocks 2022 的密码
+// （与 sing-box generate rand --base64 <n> 相同）
+func Key(n int) string {
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
+	return base64.StdEncoding.EncodeToString(b)
+}
