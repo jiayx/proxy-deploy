@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"time"
@@ -99,8 +100,14 @@ func (o *Orchestrator) Deploy(ctx context.Context, p *Plan, caddyBinary string, 
 			}
 		}
 	}
+	// Caddy 的 unit 或二进制变化后 reload 不会生效，需要重启
+	restartCaddy := caddyBinary != ""
 	for _, u := range units {
-		if err := system.WriteFile(o.layout.UnitPath(u.Name), []byte(u.Content), 0644); err != nil {
+		path := o.layout.UnitPath(u.Name)
+		if old, err := os.ReadFile(path); u.Name == caddyUnit && (err != nil || string(old) != u.Content) {
+			restartCaddy = true
+		}
+		if err := system.WriteFile(path, []byte(u.Content), 0644); err != nil {
 			return err
 		}
 	}
@@ -119,7 +126,11 @@ func (o *Orchestrator) Deploy(ctx context.Context, p *Plan, caddyBinary string, 
 	}
 
 	logf("启动入口 %s", caddyUnit)
-	if err := o.systemd.ReloadOrRestart(ctx, caddyUnit); err != nil {
+	start := o.systemd.ReloadOrRestart
+	if restartCaddy {
+		start = o.systemd.Restart
+	}
+	if err := start(ctx, caddyUnit); err != nil {
 		return o.withJournal(ctx, caddyUnit, err)
 	}
 
@@ -146,7 +157,23 @@ func (o *Orchestrator) Deploy(ctx context.Context, p *Plan, caddyBinary string, 
 			return o.withJournal(ctx, u, fmt.Errorf("%s 状态为 %s", u, state))
 		}
 	}
+	if o.layout.User && !o.Lingering(ctx) {
+		logf("警告：当前用户未开启 linger，注销后服务会被停止、开机后也不会自动启动。请执行：sudo loginctl enable-linger %s", currentUser())
+	}
 	return nil
+}
+
+// Lingering 报告当前用户是否开启了 linger（用户服务不随登录会话启停）；仅对 --user 有意义
+func (o *Orchestrator) Lingering(ctx context.Context) bool {
+	out, err := exec.CommandContext(ctx, "loginctl", "show-user", currentUser(), "-p", "Linger", "--value").Output()
+	return err == nil && strings.TrimSpace(string(out)) == "yes"
+}
+
+func currentUser() string {
+	if u, err := user.Current(); err == nil {
+		return u.Username
+	}
+	return os.Getenv("USER")
 }
 
 // preflight 检查部署需要的端口是否被其他进程占用；本部署已占用的端口跳过

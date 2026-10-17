@@ -5,6 +5,8 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,26 +14,31 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
+// httpClient 的超时覆盖整个下载过程，避免网络异常时部署无限挂起
+var httpClient = &http.Client{Timeout: 10 * time.Minute}
+
 // Download 将 url 下载到 dest，设置文件权限 mode，幂等（已存在则跳过）。
-func Download(ctx context.Context, url, dest string, mode os.FileMode) error {
+// sha256 非空时校验下载内容。
+func Download(ctx context.Context, url, sum, dest string, mode os.FileMode) error {
 	if _, err := os.Stat(dest); err == nil {
 		return nil
 	}
-	data, err := fetch(ctx, url)
+	data, err := fetch(ctx, url, sum)
 	if err != nil {
 		return err
 	}
 	return WriteFile(dest, data, mode)
 }
 
-// DownloadAndExtract 下载 zip 包，从中提取指定文件名的条目到 dest，幂等。
-func DownloadAndExtract(ctx context.Context, url, entryName, dest string, mode os.FileMode) error {
+// DownloadAndExtract 下载 zip 包并校验 sha256，从中提取指定文件名的条目到 dest，幂等。
+func DownloadAndExtract(ctx context.Context, url, sum, entryName, dest string, mode os.FileMode) error {
 	if _, err := os.Stat(dest); err == nil {
 		return nil
 	}
-	data, err := fetch(ctx, url)
+	data, err := fetch(ctx, url, sum)
 	if err != nil {
 		return err
 	}
@@ -57,12 +64,25 @@ func DownloadAndExtract(ctx context.Context, url, entryName, dest string, mode o
 	return fmt.Errorf("entry %q not found in zip from %s", entryName, url)
 }
 
-func fetch(ctx context.Context, url string) ([]byte, error) {
+// FetchChecksum 读取 sha256sum 格式的校验文件，返回第一个字段
+func FetchChecksum(ctx context.Context, url string) (string, error) {
+	data, err := fetch(ctx, url, "")
+	if err != nil {
+		return "", err
+	}
+	fields := strings.Fields(string(data))
+	if len(fields) == 0 || len(fields[0]) != sha256.Size*2 {
+		return "", fmt.Errorf("%s 不是有效的 sha256 校验文件", url)
+	}
+	return fields[0], nil
+}
+
+func fetch(ctx context.Context, url, wantSum string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("download %s: %w", url, err)
 	}
@@ -70,7 +90,17 @@ func fetch(ctx context.Context, url string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("download %s: HTTP %d", url, resp.StatusCode)
 	}
-	return io.ReadAll(resp.Body)
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("download %s: %w", url, err)
+	}
+	if wantSum != "" {
+		sum := sha256.Sum256(data)
+		if got := hex.EncodeToString(sum[:]); !strings.EqualFold(got, wantSum) {
+			return nil, fmt.Errorf("download %s: sha256 不匹配（期望 %s，实际 %s）", url, wantSum, got)
+		}
+	}
+	return data, nil
 }
 
 // InstallVersioned 把二进制保存为带版本号的 versioned 文件（已存在则复用），

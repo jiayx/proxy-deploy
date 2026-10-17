@@ -38,14 +38,23 @@ func Install(ctx context.Context, layout *paths.Layout, localBinary string) erro
 		}
 	case fileExists(dest):
 	default:
-		url := fmt.Sprintf("%s/caddy-l4-%s-%s", releaseBase, runtime.GOOS, runtime.GOARCH)
-		if err := system.Download(ctx, url, dest, 0755); err != nil {
+		if err := downloadPrebuilt(ctx, dest); err != nil {
 			if berr := buildWithXcaddy(ctx, dest); berr != nil {
 				return fmt.Errorf("download prebuilt caddy (%v); %w", err, berr)
 			}
 		}
 	}
 	return verifyModules(ctx, dest)
+}
+
+// downloadPrebuilt 下载 CI 发布的预构建二进制，并用同时发布的 .sha256 文件校验
+func downloadPrebuilt(ctx context.Context, dest string) error {
+	url := fmt.Sprintf("%s/caddy-l4-%s-%s", releaseBase, runtime.GOOS, runtime.GOARCH)
+	sum, err := system.FetchChecksum(ctx, url+".sha256")
+	if err != nil {
+		return err
+	}
+	return system.Download(ctx, url, sum, dest, 0755)
 }
 
 func verifyModules(ctx context.Context, bin string) error {

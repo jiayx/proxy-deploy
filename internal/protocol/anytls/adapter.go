@@ -25,6 +25,12 @@ const (
 	version = "0.0.13"
 )
 
+// checksums 是上游发布包的 sha256，按 GOOS/GOARCH 固定；升级版本时一并更新
+var checksums = map[string]string{
+	"linux/amd64": "7e80fc099ea54a71110d256dd60648c47c63c70a3c499eb1f6d7aaa4edb7016f",
+	"linux/arm64": "88cb762c3c8eb56b46a2d8d6feab9c0858655192143fc164874229499246a956",
+}
+
 type Adapter struct {
 	layout *paths.Layout
 }
@@ -41,17 +47,18 @@ func (a *Adapter) BackendTLS() bool              { return true }
 func (a *Adapter) ConfigPath() string { return "" }
 
 func (a *Adapter) Validate(cfg *config.ProtocolConfig) error {
-	if protocol.StringOption(cfg, "password") == "" {
-		return fmt.Errorf("config.password is required")
-	}
-	return nil
+	return protocol.RequirePassword(cfg)
 }
 
 func (a *Adapter) Install(ctx context.Context) error {
+	sum, ok := checksums[runtime.GOOS+"/"+runtime.GOARCH]
+	if !ok {
+		return fmt.Errorf("anytls %s 不支持 %s/%s", version, runtime.GOOS, runtime.GOARCH)
+	}
 	u := fmt.Sprintf("https://github.com/anytls/anytls-go/releases/download/v%s/anytls_%s_%s_%s.zip",
 		version, version, runtime.GOOS, runtime.GOARCH)
 	return system.InstallVersioned(a.layout.VersionedBin(name, version), a.layout.ProtocolBin(name),
-		func(dest string) error { return system.DownloadAndExtract(ctx, u, "anytls-server", dest, 0755) })
+		func(dest string) error { return system.DownloadAndExtract(ctx, u, sum, "anytls-server", dest, 0755) })
 }
 
 func (a *Adapter) GenerateConfig(cfg *config.ProtocolConfig, rt protocol.Runtime) ([]byte, error) {

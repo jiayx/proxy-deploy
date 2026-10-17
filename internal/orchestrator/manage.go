@@ -87,12 +87,17 @@ func (o *Orchestrator) Restart(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
+	matched := false
 	for _, u := range m.Services {
 		if name == "" || u == unitPrefix+name+".service" || u == name {
+			matched = true
 			if err := o.systemd.Restart(ctx, u); err != nil {
-				return err
+				return o.withJournal(ctx, u, err)
 			}
 		}
+	}
+	if !matched {
+		return fmt.Errorf("未知服务 %q，可选：%s", name, strings.Join(m.Services, ", "))
 	}
 	return nil
 }

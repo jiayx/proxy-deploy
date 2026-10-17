@@ -26,6 +26,12 @@ const (
 	release = "app/v2.13.0"
 )
 
+// checksums 取自上游发布的 hashes.txt，按 GOOS/GOARCH 固定；升级版本时一并更新
+var checksums = map[string]string{
+	"linux/amd64": "907ba8c9693edb104b20582681fb7dc15639d5b64a9cbb616a7b539190a86691",
+	"linux/arm64": "a68a61a84452ca250ce0368202521965ca9cc9d801a404f1dc9008ac6cf677a7",
+}
+
 type Adapter struct {
 	layout *paths.Layout
 }
@@ -40,17 +46,18 @@ func (a *Adapter) NeedsCertificate() bool        { return true }
 func (a *Adapter) ConfigPath() string            { return a.layout.ProtocolConfig(name) }
 
 func (a *Adapter) Validate(cfg *config.ProtocolConfig) error {
-	if protocol.StringOption(cfg, "password") == "" {
-		return fmt.Errorf("config.password is required")
-	}
-	return nil
+	return protocol.RequirePassword(cfg)
 }
 
 func (a *Adapter) Install(ctx context.Context) error {
+	sum, ok := checksums[runtime.GOOS+"/"+runtime.GOARCH]
+	if !ok {
+		return fmt.Errorf("hysteria2 %s 不支持 %s/%s", release, runtime.GOOS, runtime.GOARCH)
+	}
 	u := fmt.Sprintf("https://github.com/apernet/hysteria/releases/download/%s/hysteria-%s-%s",
 		release, runtime.GOOS, runtime.GOARCH)
 	return system.InstallVersioned(a.layout.VersionedBin(name, release), a.layout.ProtocolBin(name),
-		func(dest string) error { return system.Download(ctx, u, dest, 0755) })
+		func(dest string) error { return system.Download(ctx, u, sum, dest, 0755) })
 }
 
 type serverConfig struct {

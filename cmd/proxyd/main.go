@@ -78,7 +78,8 @@ func run(ctx context.Context, cmd string, rest []string, layout *paths.Layout,
 
 	// 以下命令只依赖安装清单，不需要配置文件
 	case "status":
-		units, certs, err := orchestrator.New(nil, nil, layout).Status(ctx)
+		orch := orchestrator.New(nil, nil, layout)
+		units, certs, err := orch.Status(ctx)
 		if err != nil {
 			return err
 		}
@@ -96,8 +97,14 @@ func run(ctx context.Context, cmd string, rest []string, layout *paths.Layout,
 				fmt.Printf("  ✗ %-40s %v\n", c.Name, c.Err)
 				continue
 			}
-			left := time.Until(c.NotAfter).Round(time.Hour)
-			fmt.Printf("  ✓ %-40s 到期 %s（剩余 %d 天）\n", c.Name, c.NotAfter.Local().Format("2006-01-02 15:04"), int(left.Hours()/24))
+			mark := "✓"
+			if !time.Now().Before(c.NotAfter) {
+				mark = "✗"
+			}
+			fmt.Printf("  %s %-40s 到期 %s（%s）\n", mark, c.Name, c.NotAfter.Local().Format("2006-01-02 15:04"), remaining(time.Until(c.NotAfter)))
+		}
+		if layout.User && !orch.Lingering(ctx) {
+			fmt.Printf("\n警告：当前用户未开启 linger，注销后服务会被停止。执行 sudo loginctl enable-linger $USER 开启\n")
 		}
 		return nil
 	case "logs":
@@ -155,6 +162,18 @@ func run(ctx context.Context, cmd string, rest []string, layout *paths.Layout,
 		return printClients(orch, plan)
 	}
 	return fmt.Errorf("未知命令 %q", cmd)
+}
+
+// remaining 把证书剩余有效期格式化为天或小时（内部 CA 的证书只有 12 小时）
+func remaining(d time.Duration) string {
+	switch {
+	case d <= 0:
+		return "已过期"
+	case d >= 48*time.Hour:
+		return fmt.Sprintf("剩余 %d 天", int(d.Hours()/24))
+	default:
+		return fmt.Sprintf("剩余 %d 小时", int(d.Hours()))
+	}
 }
 
 func printPlan(p *orchestrator.Plan) {

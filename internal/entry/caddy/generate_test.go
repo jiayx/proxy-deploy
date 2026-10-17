@@ -1,0 +1,67 @@
+package caddy
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
+
+func TestCertPaths(t *testing.T) {
+	crt, _ := CertPaths("/d", Issuer{Kind: "acme"}, "a.com")
+	if crt != "/d/certificates/acme-v02.api.letsencrypt.org-directory/a.com/a.com.crt" {
+		t.Fatalf("letsencrypt path: %s", crt)
+	}
+	crt, _ = CertPaths("/d", Issuer{Kind: "internal"}, "a.com")
+	if crt != "/d/certificates/local/a.com/a.com.crt" {
+		t.Fatalf("internal path: %s", crt)
+	}
+}
+
+func TestGenerate(t *testing.T) {
+	data, err := Generate(Spec{
+		AdminSocket: "/v/admin.sock",
+		StorageRoot: "/v/caddy",
+		Issuer:      Issuer{Kind: "internal"},
+		CertNames:   []string{"a.com", "t.a.com"},
+		DefaultSNI:  "a.com",
+		HTTPSPort:   8443,
+		HTTPPort:    8080,
+		SiteAddr:    "127.0.0.1:20000",
+		TCPServers:  []TCPServer{{Port: 8443, Routes: []TCPRoute{{SNI: "t.a.com", Upstream: "127.0.0.1:20001", ReencryptUpstream: true}}}},
+		UDPServers:  []UDPServer{{Port: 8443, Routes: []UDPRoute{{SNI: "u.a.com", Upstream: "127.0.0.1:20002"}}}},
+		Sites:       []Site{{Root: "/www"}, {Host: "app.a.com", Upstream: "127.0.0.1:3000"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	s := string(data)
+	for _, want := range []string{
+		`"listen": "unix//v/admin.sock"`,
+		`"install_trust": false`,
+		`"insecure_skip_verify": true`,
+		`"udp/127.0.0.1:20002"`,
+		`"udp/:8443"`,
+		`https://{http.request.host}:8443{http.request.uri}`,
+		`"fallback_sni": "a.com"`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("generated config lacks %s", want)
+		}
+	}
+
+	// 有 host 的站点必须排在兜底站点之前，否则永远匹配不到
+	routes := cfg["apps"].(map[string]any)["http"].(map[string]any)["servers"].(map[string]any)["site"].(map[string]any)["routes"].([]any)
+	if len(routes) != 2 || routes[0].(map[string]any)["match"] == nil || routes[1].(map[string]any)["match"] != nil {
+		t.Fatalf("host-matched site should precede fallback: %v", routes)
+	}
+
+	// TCP 入口最后一条路由是不带 match 的网站兜底
+	tcp := cfg["apps"].(map[string]any)["layer4"].(map[string]any)["servers"].(map[string]any)["tcp_8443"].(map[string]any)["routes"].([]any)
+	if last := tcp[len(tcp)-1].(map[string]any); last["match"] != nil {
+		t.Fatalf("last TCP route should be the site fallback: %v", last)
+	}
+}

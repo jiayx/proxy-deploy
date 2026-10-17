@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"context"
+	"fmt"
 	"sort"
 
 	"github.com/jiayx/proxy-deploy/internal/config"
@@ -95,6 +96,17 @@ func (t Transport) String() string {
 		return "tcp+udp"
 	}
 	return "unknown"
+}
+
+// RequirePassword 校验 config.password 已填写，且不是示例里的占位值
+func RequirePassword(cfg *config.ProtocolConfig) error {
+	switch StringOption(cfg, "password") {
+	case "":
+		return fmt.Errorf("config.password is required")
+	case "change-me":
+		return fmt.Errorf("config.password 仍是占位值 change-me")
+	}
+	return nil
 }
 
 // StringOption 读取协议配置中的字符串选项

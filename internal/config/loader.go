@@ -1,7 +1,12 @@
 package config
 
 import (
+	"bytes"
+	"crypto/rand"
+	"encoding/base64"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 
 	"gopkg.in/yaml.v3"
@@ -14,7 +19,9 @@ func Load(path string) (*DeployConfig, error) {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
 	var cfg DeployConfig
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true) // 拼错的字段名直接报错，而不是悄悄使用默认值
+	if err := dec.Decode(&cfg); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 	if err := cfg.Validate(); err != nil {
@@ -55,9 +62,23 @@ func (c *DeployConfig) Validate() error {
 		c.Entry.HTTPPort = 80
 	}
 
+	for name, port := range map[string]int{"entry.https_port": c.Entry.HTTPSPort, "entry.http_port": c.Entry.HTTPPort} {
+		if port < 1 || port > 65535 {
+			return fmt.Errorf("%s: invalid port %d", name, port)
+		}
+	}
+
+	seen := map[string]bool{}
 	for i, p := range c.Protocols {
 		if p.Name == "" {
 			return fmt.Errorf("protocols[%d]: name is required", i)
+		}
+		if seen[p.Name] {
+			return fmt.Errorf("protocols[%d]: duplicate protocol %q (each protocol can be configured once)", i, p.Name)
+		}
+		seen[p.Name] = true
+		if p.Port < 0 || p.Port > 65535 {
+			return fmt.Errorf("protocols[%d]: invalid port %d", i, p.Port)
 		}
 	}
 	for i, w := range c.Web {
@@ -74,9 +95,18 @@ func (c *DeployConfig) Validate() error {
 	return nil
 }
 
-// Example 返回一个带注释的示例配置
+// Example 返回一个带注释的示例配置，协议密码随机生成
 func Example() string {
-	return `# proxy-deploy 配置示例
+	return fmt.Sprintf(exampleTemplate, randomPassword(), randomPassword())
+}
+
+func randomPassword() string {
+	b := make([]byte, 18)
+	_, _ = rand.Read(b)
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+const exampleTemplate = `# proxy-deploy 配置示例
 domain: example.com
 
 server:
@@ -95,15 +125,14 @@ protocols:
     enabled: true
     # sni: hysteria2.example.com   # 默认 <name>.<domain>，需要解析到本机
     config:
-      password: change-me
+      password: "%s"
 
   - name: anytls            # TCP，与网站共享 TCP/<https_port>，按 SNI 分流
     enabled: true
     config:
-      password: change-me
+      password: "%s"
 
 web:
   - name: site
     type: static            # 不填 root 时使用安装目录下的 www
 `
-}

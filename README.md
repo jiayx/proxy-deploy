@@ -32,6 +32,7 @@
 ```bash
 go build -o proxyd ./cmd/proxyd
 ./proxyd -h
+go test ./...
 ```
 
 部署需要运行在有 `systemctl` 和 `journalctl` 的 Linux 主机上，系统级安装需要 root 权限。构建机与目标平台不同时，可在构建命令前指定 `GOOS=linux GOARCH=amd64` 或目标架构。
@@ -39,7 +40,7 @@ go build -o proxyd ./cmd/proxyd
 使用默认公网证书配置前，需把 `example.com`、`anytls.example.com` 和 `hysteria2.example.com` 替换为自己的域名并解析到服务器；使用额外的网站 `host` 或自定义 SNI 时，也需要配置相应解析。放行 TCP/80、TCP/443 和 UDP/443，并确保公网 ACME 验证可达。修改监听端口不会自动配置防火墙或公网端口转发。
 
 ```bash
-# 1. 生成带注释的配置，编辑域名、邮箱和两个协议的密码
+# 1. 生成带注释的配置（协议密码已随机生成），编辑域名和邮箱
 ./proxyd init-config > deploy.yaml
 
 # 2. 检查配置与入口规划；加 --show-caddy 可查看生成的 Caddy JSON
@@ -82,12 +83,12 @@ protocols:
   - name: hysteria2
     enabled: true
     config:
-      password: change-me
+      password: "<随机生成>"
 
   - name: anytls
     enabled: true
     config:
-      password: change-me
+      password: "<随机生成>"
 
 web:
   - name: site
@@ -103,11 +104,11 @@ web:
 | `protocols[].enabled` | 只有显式设为 `true` 才启用 |
 | `protocols[].port` | 公网端口，默认使用 `entry.https_port` |
 | `protocols[].sni` | 默认 `<name>.<domain>`；TCP 协议的 SNI 必须与主域名及网站 `host` 不同 |
-| `protocols[].config.password` | 两种协议均必填的非空字符串 |
+| `protocols[].config.password` | 两种协议均必填，不能是占位值 `change-me` |
 | `anytls` 的 `config.padding_scheme` | 可选，传给 anytls-server 的 `-padding-scheme` 参数 |
 | `hysteria2` 的 `config.masquerade_url` | 可选，覆盖默认的内部伪装网站地址 |
 
-每种协议应只配置一个实例：当前二进制、配置路径和 systemd unit 都按协议名标识，不支持用重复的 `name` 部署多个独立实例。
+每种协议只能配置一个实例（重复的 `name` 会被拒绝）：二进制、配置路径和 systemd unit 都按协议名标识。配置中出现未知字段（例如拼错的字段名）时加载直接报错。
 
 ### 证书
 
@@ -182,6 +183,8 @@ sudo ./proxyd uninstall
 ./proxyd --user uninstall
 ```
 
+用户服务默认随登录会话启停：未开启 linger 时，用户注销后服务会被停止，开机后也不会自动启动。`deploy` 和 `status` 检测到这种情况会给出提示，需由管理员执行一次 `sudo loginctl enable-linger <用户名>`。
+
 高位端口下使用公网 ACME 证书时，仍需保证 CA 的验证流量能到达服务，或配置 DNS 验证。
 
 ## 程序安装与文件布局
@@ -190,10 +193,10 @@ Caddy 的安装来源按以下优先级选择，并在安装后检查 TLS / QUIC
 
 1. `--caddy-binary` 指定的本地文件。
 2. 安装目录中已有的 `bin/caddy`。
-3. 本项目 GitHub Releases 的 `caddy-l4-<os>-<arch>` 预构建文件。
+3. 本项目 GitHub Releases 的 `caddy-l4-<os>-<arch>` 预构建文件，用同时发布的 `.sha256` 文件校验（由 `.github/workflows/ci.yml` 在打 `v*` tag 时构建 linux amd64 / arm64）。
 4. 下载失败时使用本机 `xcaddy build --with github.com/mholt/caddy-l4` 构建，需预先安装 xcaddy 和可用的 Go 工具链。
 
-协议程序从各自上游 GitHub Releases 下载，版本固定在适配器源码中（当前 AnyTLS `0.0.13`、Hysteria2 `app/v2.13.0`）。程序按版本保存并通过符号链接使用；重复部署会复用已存在的版本，更新配置不会自动追踪上游最新版本。部署主机需能访问相应下载地址。
+协议程序从各自上游 GitHub Releases 下载，版本和各平台的 sha256 固定在适配器源码中（当前 AnyTLS `0.0.13`、Hysteria2 `app/v2.13.0`，支持 linux amd64 / arm64），校验不通过不会写入文件。程序按版本保存并通过符号链接使用；重复部署会复用已存在的版本，更新配置不会自动追踪上游最新版本。部署主机需能访问相应下载地址。
 
 ```text
 <prefix>/
