@@ -72,6 +72,14 @@ type UDPServer struct {
 	Routes []UDPRoute
 }
 
+// Backend 是由网关启动并监管的协议后端进程
+type Backend struct {
+	Name         string
+	Command      []string
+	RequireFiles []string // 都存在后才启动，例如协议读取的证书
+	Revision     string   // 配置版本，变化时网关重启进程
+}
+
 // Site 是一个网站：静态目录或反向代理
 type Site struct {
 	Host     string // 空表示兜底
@@ -96,6 +104,7 @@ type Spec struct {
 
 	TCPServers []TCPServer
 	UDPServers []UDPServer
+	Backends   []Backend
 	Sites      []Site
 }
 
@@ -181,7 +190,19 @@ func gatewayApp(s Spec) obj {
 		}
 		servers[fmt.Sprintf("udp_%d", srv.Port)] = server
 	}
-	return obj{"servers": servers}
+	app := obj{"servers": servers}
+	if len(s.Backends) > 0 {
+		backends := obj{}
+		for _, b := range s.Backends {
+			backend := obj{"command": b.Command, "revision": b.Revision}
+			if len(b.RequireFiles) > 0 {
+				backend["require_files"] = b.RequireFiles
+			}
+			backends[b.Name] = backend
+		}
+		app["backends"] = backends
+	}
+	return app
 }
 
 // siteHTTP3 报告内部网站是否提供 HTTP/3（主入口端口上有 UDP 网关）

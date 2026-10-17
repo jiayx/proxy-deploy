@@ -2,8 +2,16 @@ package orchestrator
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"fmt"
+	"math/big"
 	"os"
 	"os/exec"
 	"os/user"
@@ -11,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jiayx/proxy-deploy/internal/config"
 	"github.com/jiayx/proxy-deploy/internal/entry/caddy"
 	"github.com/jiayx/proxy-deploy/internal/protocol"
 	"github.com/jiayx/proxy-deploy/pkg/system"
@@ -19,9 +28,13 @@ import (
 // Logf 输出部署进度
 type Logf func(format string, args ...any)
 
-const certTimeout = 3 * time.Minute
+// backendTimeout 限制等待协议后端就绪的时间，包括首次部署时的证书签发
+const backendTimeout = 3 * time.Minute
 
-// Deploy 按规划完成安装、配置和启动。可重复执行：已有部署会被更新为新的规划
+// Deploy 按规划完成安装、配置和启动。可重复执行：已有部署会被更新为新的规划。
+//
+// systemd 只管理 Caddy；协议后端进程由 Caddy 中的网关启动和监管。配置没有变化的协议
+// 在 Caddy 重载配置后沿用原进程，连接不断。
 func (o *Orchestrator) Deploy(ctx context.Context, p *Plan, caddyBinary string, logf Logf) error {
 	if len(p.Conflicts) > 0 {
 		return errors.New("规划存在冲突，未做任何变更")
@@ -46,41 +59,34 @@ func (o *Orchestrator) Deploy(ctx context.Context, p *Plan, caddyBinary string, 
 		}
 	}
 
+	// 协议配置先校验再写入；正在运行的旧进程直到 Caddy 重载后才会被替换
+	usedBins := []string{o.layout.CaddyBin()}
+	p.Caddy.Backends = nil
+	for _, s := range p.Services {
+		b, err := o.writeProtocolConfig(ctx, s)
+		if err != nil {
+			return err
+		}
+		p.Caddy.Backends = append(p.Caddy.Backends, *b)
+		usedBins = append(usedBins, b.Command[0])
+	}
 	if err := o.writeCaddyConfig(ctx, p); err != nil {
 		return err
 	}
 
-	units := []unitFile{o.caddyUnit()}
-	usedBins := []string{o.layout.CaddyBin()}
-	m := &Manifest{Prefix: o.layout.Prefix, User: o.layout.User, Services: []string{caddyUnit}, Ports: p.Ports}
+	unit := o.caddyUnit()
+	m := &Manifest{Prefix: o.layout.Prefix, User: o.layout.User, Services: []string{caddyUnit}, Units: []string{unit.Name}, Ports: p.Ports}
 	for _, c := range p.Certs {
 		m.Certs = append(m.Certs, CertFile{c.Name, c.CertPath})
 	}
-	// 停掉任何服务之前先检查协议配置；依赖的证书尚未签发（首次部署）的协议留到证书就绪后再检查
-	if err := o.writeProtocolConfigs(ctx, p, true); err != nil {
-		return err
-	}
-	for _, s := range p.Services {
-		svc, err := s.Adapter.Service(s.Cfg, s.Runtime)
-		if err != nil {
-			return fmt.Errorf("%s service: %w", s.Cfg.Name, err)
-		}
-		units = append(units, o.serviceUnit(s, svc))
-		usedBins = append(usedBins, svc.Args[0])
-		m.Services = append(m.Services, s.Unit)
-	}
-	for _, u := range units {
-		m.Units = append(m.Units, u.Name)
+	for _, b := range p.Caddy.Backends {
+		m.Backends = append(m.Backends, b.Name)
 	}
 
-	// 先移除上次部署有、这次不再需要的 unit
+	// 移除上次部署有、这次不再需要的 unit
 	if prev != nil {
-		keep := map[string]bool{}
-		for _, u := range m.Units {
-			keep[u] = true
-		}
 		for _, u := range prev.Units {
-			if !keep[u] {
+			if u != unit.Name {
 				logf("移除不再使用的 %s", u)
 				_ = o.systemd.DisableNow(ctx, u)
 				_ = os.Remove(o.layout.UnitPath(u))
@@ -89,37 +95,25 @@ func (o *Orchestrator) Deploy(ctx context.Context, p *Plan, caddyBinary string, 
 	}
 	// Caddy 的 unit 或二进制变化后 reload 不会生效，需要重启
 	restartCaddy := caddyChanged
-	for _, u := range units {
-		path := o.layout.UnitPath(u.Name)
-		if old, err := os.ReadFile(path); u.Name == caddyUnit && (err != nil || string(old) != u.Content) {
-			restartCaddy = true
-		}
-		if err := system.WriteFile(path, []byte(u.Content), 0644); err != nil {
-			return err
-		}
+	unitPath := o.layout.UnitPath(unit.Name)
+	if old, err := os.ReadFile(unitPath); err != nil || string(old) != unit.Content {
+		restartCaddy = true
+	}
+	if err := system.WriteFile(unitPath, []byte(unit.Content), 0644); err != nil {
+		return err
 	}
 	// 启动前写入清单，即使后面失败也能完整卸载
 	if err := saveManifest(o.layout, m); err != nil {
 		return err
 	}
-
 	if err := o.systemd.DaemonReload(ctx); err != nil {
 		return err
 	}
-	for _, u := range m.Services {
-		if err := o.systemd.Enable(ctx, u); err != nil {
-			return err
-		}
+	if err := o.systemd.Enable(ctx, caddyUnit); err != nil {
+		return err
 	}
 
-	// 协议服务随后都会重启；先停掉，避免旧进程占着本次重新分配给 Caddy 的回环端口
-	for _, s := range p.Services {
-		if err := o.systemd.Stop(ctx, s.Unit); err != nil {
-			return err
-		}
-	}
-
-	logf("启动入口 %s", caddyUnit)
+	logf("启动 %s", caddyUnit)
 	start := o.systemd.ReloadOrRestart
 	if restartCaddy {
 		start = o.systemd.Restart
@@ -127,28 +121,10 @@ func (o *Orchestrator) Deploy(ctx context.Context, p *Plan, caddyBinary string, 
 	if err := start(ctx, caddyUnit); err != nil {
 		return o.withJournal(ctx, caddyUnit, err)
 	}
-
-	if err := o.waitCerts(ctx, p, logf); err != nil {
-		return err
-	}
-	if err := o.writeProtocolConfigs(ctx, p, false); err != nil {
+	if err := o.waitBackends(ctx, m.Backends, logf); err != nil {
 		return err
 	}
 
-	for _, s := range p.Services {
-		logf("启动 %s", s.Unit)
-		if err := o.systemd.Restart(ctx, s.Unit); err != nil {
-			return o.withJournal(ctx, s.Unit, err)
-		}
-	}
-
-	// 留出时间让启动即退出的服务暴露出来
-	time.Sleep(2 * time.Second)
-	for _, u := range m.Services {
-		if state := o.systemd.ActiveState(ctx, u); state != "active" {
-			return o.withJournal(ctx, u, fmt.Errorf("%s 状态为 %s", u, state))
-		}
-	}
 	// 部署成功后再清理，失败时保留旧程序
 	removed, err := system.PruneBinaries(o.layout.BinDir(), usedBins)
 	for _, r := range removed {
@@ -177,35 +153,92 @@ func currentUser() string {
 	return os.Getenv("USER")
 }
 
-// writeProtocolConfigs 生成协议配置，校验通过后写入。dryRun 时只校验不写入，
-// 并跳过证书文件还不存在的协议（配置引用证书，签发前无法校验）
-func (o *Orchestrator) writeProtocolConfigs(ctx context.Context, p *Plan, dryRun bool) error {
-	for _, s := range p.Services {
-		if dryRun && s.Runtime.Cert != nil {
-			if _, err := os.Stat(s.Runtime.Cert.CertPath); err != nil {
-				continue
-			}
-		}
-		data, err := s.Adapter.GenerateConfig(s.Cfg, s.Runtime)
-		if err != nil {
-			return fmt.Errorf("%s config: %w", s.Cfg.Name, err)
-		}
-		if data == nil {
-			continue
-		}
+// writeProtocolConfig 生成、校验并写入一个协议的配置，返回交给网关监管的后端描述。
+// 证书尚未签发（首次部署）时，用临时自签证书生成一份同样的配置来校验
+func (o *Orchestrator) writeProtocolConfig(ctx context.Context, s *Service) (*caddy.Backend, error) {
+	svc, err := s.Adapter.Service(s.Cfg, s.Runtime)
+	if err != nil {
+		return nil, fmt.Errorf("%s service: %w", s.Cfg.Name, err)
+	}
+	b := &caddy.Backend{Name: s.Cfg.Name, Command: svc.Args}
+	if s.Runtime.Cert != nil {
+		b.RequireFiles = []string{s.Runtime.Cert.CertPath, s.Runtime.Cert.KeyPath}
+	}
+
+	data, err := s.Adapter.GenerateConfig(s.Cfg, s.Runtime)
+	if err != nil {
+		return nil, fmt.Errorf("%s config: %w", s.Cfg.Name, err)
+	}
+	if data != nil {
 		check := func(string) error { return nil }
 		if c, ok := s.Adapter.(protocol.ConfigChecker); ok {
 			check = func(path string) error { return c.CheckConfig(ctx, path) }
+			if s.Runtime.Cert != nil && !fileExists(s.Runtime.Cert.CertPath) {
+				if err := o.checkWithTempCert(s, check); err != nil {
+					return nil, fmt.Errorf("%s config: %w", s.Cfg.Name, err)
+				}
+				check = func(string) error { return nil }
+			}
 		}
-		write := system.WriteFileChecked
-		if dryRun {
-			write = system.CheckFile
-		}
-		if err := write(s.Adapter.ConfigPath(), data, 0600, check); err != nil {
-			return fmt.Errorf("%s config: %w", s.Cfg.Name, err)
+		if err := system.WriteFileChecked(s.Adapter.ConfigPath(), data, 0600, check); err != nil {
+			return nil, fmt.Errorf("%s config: %w", s.Cfg.Name, err)
 		}
 	}
-	return nil
+
+	// revision 覆盖配置内容和实际的程序版本（bin/ 下是指向版本文件的链接），任一变化网关都会重启进程
+	h := sha256.New()
+	h.Write(data)
+	if real, err := filepath.EvalSymlinks(b.Command[0]); err == nil {
+		h.Write([]byte(real))
+	}
+	b.Revision = hex.EncodeToString(h.Sum(nil))[:16]
+	return b, nil
+}
+
+// checkWithTempCert 用临时自签证书代替尚未签发的证书生成配置并校验，只校验不写入
+func (o *Orchestrator) checkWithTempCert(s *Service, check func(string) error) error {
+	dir, err := os.MkdirTemp("", "proxyd-check-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	cert, err := writeTempCert(dir, s.Runtime.Cert.Name)
+	if err != nil {
+		return err
+	}
+	rt := s.Runtime
+	rt.Cert = cert
+	data, err := s.Adapter.GenerateConfig(s.Cfg, rt)
+	if err != nil {
+		return err
+	}
+	return system.CheckFile(s.Adapter.ConfigPath(), data, 0600, check)
+}
+
+func writeTempCert(dir, name string) (*config.Certificate, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), DNSNames: []string{name}, NotAfter: time.Now().Add(time.Hour)}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		return nil, err
+	}
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		return nil, err
+	}
+	c := &config.Certificate{Name: name, CertPath: filepath.Join(dir, "cert.pem"), KeyPath: filepath.Join(dir, "key.pem")}
+	if err := os.WriteFile(c.CertPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0600); err != nil {
+		return nil, err
+	}
+	return c, os.WriteFile(c.KeyPath, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0600)
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // preflight 检查部署需要的端口是否被其他进程占用；本部署已占用的端口跳过
@@ -265,31 +298,48 @@ func ensureDefaultSite(root string) error {
 	return system.WriteFile(filepath.Join(root, "index.html"), []byte(page), 0644)
 }
 
-// waitCerts 等待需要读取证书文件的协议所用证书签发完成
-func (o *Orchestrator) waitCerts(ctx context.Context, p *Plan, logf Logf) error {
-	var pending []string
-	for _, s := range p.Services {
-		if s.Runtime.Cert != nil {
-			pending = append(pending, s.Runtime.Cert.CertPath)
-		}
-	}
-	if len(pending) == 0 {
+// waitBackends 等待网关把所有协议后端启动并稳定运行；首次部署时包括等待证书签发
+func (o *Orchestrator) waitBackends(ctx context.Context, names []string, logf Logf) error {
+	if len(names) == 0 {
 		return nil
 	}
-	logf("等待证书签发")
-	deadline := time.Now().Add(certTimeout)
+	logf("等待协议后端就绪")
+	deadline := time.Now().Add(backendTimeout)
 	for {
-		var missing []string
-		for _, path := range pending {
-			if _, err := os.Stat(path); err != nil {
-				missing = append(missing, path)
+		statuses, err := o.Backends(ctx)
+		pending := map[string]BackendStatus{}
+		for _, n := range names {
+			pending[n] = BackendStatus{Name: n, State: "unknown"}
+		}
+		if err == nil {
+			for _, st := range statuses {
+				// 运行满 3 秒才算就绪，启动即退出的配置错误会在此期间暴露
+				if _, ok := pending[st.Name]; ok && (st.State != "running" || st.Uptime < 3) {
+					pending[st.Name] = st
+				} else {
+					delete(pending, st.Name)
+				}
 			}
 		}
-		if len(missing) == 0 {
+		if len(pending) == 0 {
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return o.withJournal(ctx, caddyUnit, fmt.Errorf("%s 内证书未签发：%s", certTimeout, strings.Join(missing, ", ")))
+			var b strings.Builder
+			fmt.Fprintf(&b, "%s 内协议后端未就绪：", backendTimeout)
+			for _, st := range pending {
+				fmt.Fprintf(&b, "\n--- %s：%s", st.Name, st.State)
+				if st.LastExit != "" {
+					fmt.Fprintf(&b, "（%s，已重启 %d 次）", st.LastExit, st.Restarts)
+				}
+				for _, line := range st.Tail {
+					fmt.Fprintf(&b, "\n  %s", line)
+				}
+			}
+			if err != nil {
+				fmt.Fprintf(&b, "\n读取网关状态失败：%v", err)
+			}
+			return o.withJournal(ctx, caddyUnit, errors.New(b.String()))
 		}
 		select {
 		case <-ctx.Done():

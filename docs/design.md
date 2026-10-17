@@ -23,13 +23,13 @@
                     │ tls 应用：证书申请与续期                                       │
                     └────────────────────────────────────────────────────────────┘
                                 │ 回环地址
-                    sing-box（每个协议一个进程）：anytls、hysteria2 ……
+                    sing-box（每个协议一个进程，由网关启动和监管）：anytls、hysteria2 ……
 ```
 
 - **网关**：以 Caddy 应用模块的形式实现（`gateway/`），不依赖 caddy-l4。我们需要的四层功能很少（按 SNI 路由、终结或透传 TLS、TCP/UDP 转发），自己实现后可以按需扩展，统计也能直接放在转发路径里做。
 - **Caddy 构建**：`cmd/caddy` 是一个导入官方标准模块和 `gateway` 的 Caddy 入口，依赖版本由本仓库 `go.mod` 固定，用 `go build` 直接构建，不需要 xcaddy。
 - **协议后端**：sing-box，每个协议一个独立进程。改动或重启一个协议不影响其他协议；某个协议出问题也不会把网关和网站带挂。
-- **`proxyd`**：负责安装二进制、根据 `deploy.yaml` 生成 Caddy 和 sing-box 配置、管理 systemd unit。后续 sing-box 进程改由网关监管后，`proxyd` 进一步退化成安装器。
+- **`proxyd`**：负责安装二进制、根据 `deploy.yaml` 生成 Caddy 和 sing-box 配置、管理唯一的 systemd unit（Caddy）。sing-box 进程由网关监管，`proxyd` 的运维命令（状态、日志、重启）通过 Caddy 管理接口完成。
 
 ## 网关配置（JSON）
 
@@ -67,6 +67,25 @@
 - 连接迁移：QUIC 按连接 ID 识别连接。网关从后端回包的长包头学到服务端连接 ID 的长度，并从客户端短包头学习它当前使用的连接 ID（客户端握手后会改用服务端在加密帧中下发的新 ID，所以只看握手包不够），每个会话保留最近 8 个。陌生地址发来的数据报若带着已知连接 ID，就归入原会话；原地址静默超过 1 秒才把回包切到新地址，防止能看到连接 ID 的中间人伪造来源地址劫持正在通信的会话。客户端主动迁移并换用从未用过的连接 ID 时无法识别，需重新连接。
 - 性能：上传方向逐个数据报转发，下载方向在 Linux 上用 GRO/GSO 批量转发。单机回环测试中，经网关的 Hysteria2 下载约为直连的 80%。
 
+## 后端进程监管
+
+```json
+"backends": {
+  "hysteria2": {
+    "command": ["/opt/proxy-deploy/bin/sing-box", "run", "--disable-color", "-c", "/opt/proxy-deploy/etc/hysteria2/config.json"],
+    "require_files": ["…/hysteria2.example.com.crt", "…/hysteria2.example.com.key"],
+    "revision": "3f2a9c…"
+  }
+}
+```
+
+- 进程表按后端名放在进程级。Caddy 重载时先启动新配置再停止旧配置：命令、环境、`require_files`、`revision` 都相同的后端以引用计数沿用原进程；有变化的先停旧进程（释放端口）再启动新进程。`revision` 由 `proxyd` 根据配置文件内容和程序实际版本计算。
+- 进程退出后按 1 秒起、最长 10 秒的间隔重启；连续运行超过 10 秒后间隔重置。`require_files` 齐全前处于 `waiting` 状态，首次部署时等证书签发。
+- 停止时先 SIGTERM，10 秒后 SIGKILL。Linux 上设置 Pdeathsig（监管 goroutine 锁定系统线程），Caddy 异常退出时子进程随之退出；systemd 停止服务时也会清理整个 cgroup。
+- 子进程标准输出和错误按行写入 Caddy 日志（`backend` 字段，按 sing-box 前缀映射级别），并保留最后 30 行供管理接口返回。
+- 管理接口：`GET /proxy_gateway/backends`（状态、PID、运行时长、重启次数、最近输出），`POST /proxy_gateway/backends/<名称>/restart`。
+- 部署时协议配置先校验再写入。证书尚未签发时，用临时自签证书生成同样的配置交给 `sing-box check`。
+
 ## 统计与日志
 
 - 每个连接结束时记一条日志：客户端地址、SNI、路由、后端本地地址、上下行字节、时长。
@@ -77,7 +96,7 @@
 
 1. **TCP 网关**（已完成）：ClientHello 解析、终结与透传、PROXY protocol、统计与管理接口；Caddy 改为本仓库构建，去掉 caddy-l4。
 2. **UDP 网关**（已完成）：QUIC Initial 解密与 ClientHello 重组（v1/v2，跨包、乱序），按客户端地址维护会话并转发，Linux 上用 GRO/GSO 成批转发回包；主域名的 HTTP/3 由 Caddy 网站直接提供，Hysteria2 退到网关后面。以后支持 Hysteria2 混淆时，启用混淆的协议作为例外独占端口（混淆后的数据报无法识别 SNI）。
-3. **sing-box 进程监管**：由网关启动并监管 sing-box，Caddy 重载配置时保留没有变化的协议进程；systemd 只剩 Caddy 一个服务。
+3. **sing-box 进程监管**（已完成）：由网关启动并监管 sing-box，Caddy 重载配置时保留没有变化的协议进程；systemd 只剩 Caddy 一个服务。
 4. **管理与配置**：Caddyfile 支持、管理接口（状态、用户）、`proxyd` 退化成安装器。
 5. **其他**：接入已有 Web 服务器（非代理流量透传给现有 nginx / Caddy）、WARP 等出口。
 

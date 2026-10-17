@@ -15,6 +15,7 @@ type Manifest struct {
 	Prefix   string     `json:"prefix"`
 	User     bool       `json:"user"`
 	Services []string   `json:"services"` // 主服务 unit，状态展示用
+	Backends []string   `json:"backends"` // 由网关监管的协议后端进程名
 	Units    []string   `json:"units"`    // 写入 unit 目录的全部文件名
 	Ports    []Port     `json:"ports"`
 	Certs    []CertFile `json:"certs"`

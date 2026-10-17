@@ -61,9 +61,9 @@ sudo ./proxyd status
 ./proxyd -c deploy.yaml client-config
 ```
 
-`plan` 只做配置和路由规划，不写文件、不下载程序，也不探测实际端口占用。`deploy` 会检查监听端口、安装程序、生成并验证 Caddy 配置、写入 unit 和安装清单，再启动入口与协议服务并检查服务状态。
+`plan` 只做配置和路由规划，不写文件、不下载程序，也不探测实际端口占用。`deploy` 会检查监听端口、安装程序、生成并校验协议配置和 Caddy 配置、写入 unit 和安装清单，再启动（或重载）Caddy，等待网关把各协议后端启动并稳定运行。
 
-修改 YAML 后重新执行 `deploy` 即可应用配置；本次不再需要的旧 unit 会被移除。仅执行 `restart` 不会重新生成配置。
+修改 YAML 后重新执行 `deploy` 即可应用配置：Caddy 重载配置，配置没有变化的协议后端沿用原进程、连接不断，只有变化了的协议会重启。仅执行 `restart` 不会重新生成配置。
 
 ## 配置
 
@@ -112,7 +112,7 @@ web:
 | `anytls` 的 `config.padding_scheme` | 可选，填充方案，多行字符串或字符串列表，每行一条规则；格式同 sing-box anytls inbound |
 | `hysteria2` 的 `config.masquerade_url` | 可选，覆盖默认的内部伪装网站地址 |
 
-每种协议只能配置一个实例（重复的 `name` 会被拒绝）：二进制、配置路径和 systemd unit 都按协议名标识。配置中出现未知字段（例如拼错的字段名）时加载直接报错。
+每种协议只能配置一个实例（重复的 `name` 会被拒绝）：配置路径和后端进程都按协议名标识。配置中出现未知字段（例如拼错的字段名）时加载直接报错。
 
 ### 证书
 
@@ -152,8 +152,8 @@ web:
 | `deploy` | 安装、更新并启动服务，输出客户端 URI | 是 |
 | `client-config` | 根据当前 YAML 生成客户端 URI | 是 |
 | `status` | 查看已安装服务状态与证书有效期 | 否，读取安装清单 |
-| `logs <服务>` | 查看 Caddy 或协议服务日志 | 否，读取安装清单 |
-| `restart [服务]` | 重启全部或指定服务 | 否，读取安装清单 |
+| `logs <服务>` | `caddy` 查看整个服务的日志（含网关连接日志），协议名只看该协议后端的输出 | 否，读取安装清单 |
+| `restart [服务]` | 不指定或 `caddy` 时重启整个服务，指定协议名时只重启该协议的后端进程 | 否，读取安装清单 |
 | `uninstall` | 停用并删除记录的 unit，删除整个安装目录 | 否，读取安装清单 |
 
 | 选项 | 默认值 / 用途 |
@@ -199,7 +199,7 @@ sudo ./proxyd uninstall
 2. 安装目录中已有的 `bin/caddy`。
 3. 本项目 GitHub Releases 中 `caddy` release 的 `caddy-gateway-<os>-<arch>` 预构建文件，用同时发布的 `.sha256` 文件校验。该 release 由 `.github/workflows/caddy.yml` 在网关代码或依赖变化时构建 linux amd64 / arm64。
 
-协议程序从各自上游 GitHub Releases 下载，版本和各平台的 sha256 固定在适配器源码中（当前 sing-box `1.14.3`，支持 linux amd64 / arm64），校验不通过不会写入文件。所有协议都使用 sing-box 作为服务端：共用一份二进制，每个协议运行独立的进程和 unit，修改或重启某个协议不影响其他协议的连接。程序按版本保存并通过符号链接使用；重复部署会复用已存在的版本，部署成功后清理 `bin/` 中不再使用的程序和版本；更新配置不会自动追踪上游最新版本。部署主机需能访问相应下载地址。
+协议程序从各自上游 GitHub Releases 下载，版本和各平台的 sha256 固定在适配器源码中（当前 sing-box `1.14.3`，支持 linux amd64 / arm64），校验不通过不会写入文件。所有协议都使用 sing-box 作为服务端：共用一份二进制，每个协议运行一个独立进程，修改或重启某个协议不影响其他协议的连接。程序按版本保存并通过符号链接使用；重复部署会复用已存在的版本，部署成功后清理 `bin/` 中不再使用的程序和版本；更新配置不会自动追踪上游最新版本。部署主机需能访问相应下载地址。
 
 ```text
 <prefix>/
@@ -213,12 +213,17 @@ sudo ./proxyd uninstall
 │   ├── caddy-admin.sock   # Caddy 管理接口 Unix socket
 │   └── xdg/               # Caddy 其他运行时数据
 ├── www/                   # 默认网站
-└── manifest.json          # 服务、unit、端口及证书路径的安装清单
+└── manifest.json          # unit、协议后端、端口及证书路径的安装清单
 ```
 
 生成的 Caddy 配置和协议配置（含密码）权限为 `0600`。`deploy.yaml` 由使用者保存，不会自动复制到安装目录。
 
-systemd unit 在安装目录之外：系统模式写入 `/etc/systemd/system/`，用户模式写入 `$XDG_CONFIG_HOME/systemd/user/`（未设置时为 `~/.config/systemd/user/`）。主服务名为 `proxy-deploy-caddy.service`、`proxy-deploy-anytls.service` 和 `proxy-deploy-hysteria2.service`。
+systemd unit 在安装目录之外：系统模式写入 `/etc/systemd/system/`，用户模式写入 `$XDG_CONFIG_HOME/systemd/user/`（未设置时为 `~/.config/systemd/user/`）。只有一个服务 `proxy-deploy-caddy.service`。协议后端（sing-box）由 Caddy 中的网关作为子进程启动和监管：
+
+- 进程退出后自动重启，重启间隔逐步加长（最长 10 秒）；依赖证书的协议等证书文件出现后才启动。
+- 子进程输出按行写入 Caddy 的日志（带 `backend` 字段），`proxyd logs <协议名>` 只显示该协议的输出。
+- Caddy 重载配置时，命令和配置都没变的后端沿用原进程；Caddy 停止或异常退出时子进程随之退出。
+- `status` 显示每个后端的状态、PID、运行时长和重启次数；部署时后端没能就绪会显示它最近的输出。
 
 `uninstall` 根据清单清理 unit，并递归删除整个 `<prefix>`，包括证书和默认网站；自定义前缀应专用于此部署。外部网站目录及存放在前缀之外的 YAML 和 CLI 二进制不由卸载命令删除。unit 名称固定，使用不同前缀不代表能在同一个 systemd 实例中同时运行多套部署。
 

@@ -50,7 +50,6 @@ type Port struct {
 type Service struct {
 	Cfg        *config.ProtocolConfig
 	Adapter    protocol.Adapter
-	Unit       string
 	SNI        string
 	Network    string // tcp | udp
 	PublicPort int
@@ -163,7 +162,7 @@ func (o *Orchestrator) Plan() *Plan {
 		if port == 0 {
 			port = c.Entry.HTTPSPort
 		}
-		svc := &Service{Cfg: pc, Adapter: a, Unit: unitPrefix + pc.Name + ".service", SNI: sni, PublicPort: port}
+		svc := &Service{Cfg: pc, Adapter: a, SNI: sni, PublicPort: port}
 
 		switch a.Transport() {
 		case protocol.TransportTCP:

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -66,17 +67,40 @@ func (adminAPI) CaddyModule() caddy.ModuleInfo {
 	}
 }
 
+// Routes 提供：
+//
+//	GET  /proxy_gateway/stats                   各路由的连接和流量统计
+//	GET  /proxy_gateway/backends                各后端进程的状态和最近输出
+//	POST /proxy_gateway/backends/<名称>/restart  重启一个后端进程
 func (adminAPI) Routes() []caddy.AdminRoute {
-	return []caddy.AdminRoute{{
-		Pattern: "/proxy_gateway/stats",
-		Handler: caddy.AdminHandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
-			if r.Method != http.MethodGet {
+	return []caddy.AdminRoute{
+		{Pattern: "/proxy_gateway/stats", Handler: getJSON(func() any { return snapshot() })},
+		{Pattern: "/proxy_gateway/backends", Handler: getJSON(func() any { return backendStatuses() })},
+		{Pattern: "/proxy_gateway/backends/", Handler: caddy.AdminHandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+			name, action, ok := strings.Cut(strings.TrimPrefix(r.URL.Path, "/proxy_gateway/backends/"), "/")
+			if !ok || action != "restart" {
+				return caddy.APIError{HTTPStatus: http.StatusNotFound}
+			}
+			if r.Method != http.MethodPost {
 				return caddy.APIError{HTTPStatus: http.StatusMethodNotAllowed}
 			}
-			w.Header().Set("Content-Type", "application/json")
-			return json.NewEncoder(w).Encode(snapshot())
-		}),
-	}}
+			if err := restartBackend(name); err != nil {
+				return caddy.APIError{HTTPStatus: http.StatusNotFound, Err: err}
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return nil
+		})},
+	}
+}
+
+func getJSON(data func() any) caddy.AdminHandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) error {
+		if r.Method != http.MethodGet {
+			return caddy.APIError{HTTPStatus: http.StatusMethodNotAllowed}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		return json.NewEncoder(w).Encode(data())
+	}
 }
 
 var _ caddy.AdminRouter = adminAPI{}

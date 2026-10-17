@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	"sort"
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
@@ -23,12 +24,15 @@ func init() {
 // App 是 proxy_gateway 应用
 type App struct {
 	Servers map[string]*Server `json:"servers,omitempty"`
+	// Backends 是由网关启动并监管的协议后端进程，按名称索引
+	Backends map[string]*Backend `json:"backends,omitempty"`
 
 	// TLSConnectionPolicies 用于终结 TLS 的路由；为空时使用默认策略（按 SNI 取 Caddy 管理的证书）
 	TLSConnectionPolicies caddytls.ConnectionPolicies `json:"tls_connection_policies,omitempty"`
 
 	ctx    caddy.Context
 	logger *zap.Logger
+	procs  []*process
 }
 
 // Server 是一个监听入口
@@ -82,6 +86,12 @@ func (App) CaddyModule() caddy.ModuleInfo {
 func (a *App) Provision(ctx caddy.Context) error {
 	a.ctx = ctx
 	a.logger = ctx.Logger()
+
+	for name, b := range a.Backends {
+		if len(b.Command) == 0 {
+			return fmt.Errorf("backend %s: command is required", name)
+		}
+	}
 
 	needTLS := false
 	for name, srv := range a.Servers {
@@ -143,6 +153,15 @@ func (a *App) Provision(ctx caddy.Context) error {
 }
 
 func (a *App) Start() error {
+	// 先启动后端，监听开始后转发过来的连接才有去处
+	names := make([]string, 0, len(a.Backends))
+	for name := range a.Backends {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		a.procs = append(a.procs, acquireBackend(name, a.Backends[name], a.logger))
+	}
 	for name, srv := range a.Servers {
 		for _, addr := range srv.Listen {
 			na, err := caddy.ParseNetworkAddress(addr)
@@ -185,6 +204,10 @@ func (a *App) Stop() error {
 		}
 		srv.packetConns = nil
 	}
+	for _, p := range a.procs {
+		releaseBackend(p)
+	}
+	a.procs = nil
 	return nil
 }
 

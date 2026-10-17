@@ -30,7 +30,9 @@ func TestGenerate(t *testing.T) {
 		SitePlainAddr: "127.0.0.1:20001",
 		TCPServers:    []TCPServer{{Port: 8443, Routes: []TCPRoute{{Name: "anytls", SNI: "t.a.com", Upstream: "127.0.0.1:20002"}}}},
 		UDPServers:    []UDPServer{{Port: 8443, Routes: []UDPRoute{{Name: "hysteria2", SNI: "h.a.com", Upstream: "127.0.0.1:20003"}}}},
-		Sites:         []Site{{Root: "/www"}, {Host: "app.a.com", Upstream: "127.0.0.1:3000"}},
+		Backends: []Backend{{Name: "hysteria2", Command: []string{"/opt/pd/bin/sing-box", "run", "-c", "/opt/pd/etc/hysteria2/config.json"},
+			RequireFiles: []string{"/c.crt"}, Revision: "r1"}},
+		Sites: []Site{{Root: "/www"}, {Host: "app.a.com", Upstream: "127.0.0.1:3000"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -47,6 +49,9 @@ func TestGenerate(t *testing.T) {
 		`"fallback_sni": "a.com"`,
 		`"proxy_protocol": true`,
 		`"wrapper": "proxy_protocol"`,
+		`"require_files": [`,
+		`"revision": "r1"`,
+		`"/opt/pd/bin/sing-box"`,
 		`"udp/:8443"`,
 		`"upstream": "127.0.0.1:20003"`,
 		`"h3"`,

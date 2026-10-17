@@ -3,8 +3,6 @@ package orchestrator
 import (
 	"fmt"
 	"strings"
-
-	"github.com/jiayx/proxy-deploy/internal/protocol"
 )
 
 // unitFile 是一个待写入的 systemd unit 文件
@@ -29,7 +27,7 @@ func (o *Orchestrator) caddyEnv() []string {
 func (o *Orchestrator) caddyUnit() unitFile {
 	bin, cfg := o.layout.CaddyBin(), o.layout.CaddyConfig()
 	var b strings.Builder
-	fmt.Fprintf(&b, "[Unit]\nDescription=proxy-deploy entry (Caddy + layer4)\nAfter=network-online.target\nWants=network-online.target\n\n")
+	fmt.Fprintf(&b, "[Unit]\nDescription=proxy-deploy (Caddy + gateway + protocol backends)\nAfter=network-online.target\nWants=network-online.target\n\n")
 	fmt.Fprintf(&b, "[Service]\nType=notify\n")
 	fmt.Fprintf(&b, "ExecStart=%s\n", execLine([]string{bin, "run", "--config", cfg}))
 	fmt.Fprintf(&b, "ExecReload=%s\n", execLine([]string{bin, "reload", "--config", cfg, "--address", "unix/" + o.layout.CaddyAdminSocket()}))
@@ -42,19 +40,6 @@ func (o *Orchestrator) caddyUnit() unitFile {
 	}
 	fmt.Fprintf(&b, "\n[Install]\nWantedBy=%s\n", o.wantedBy())
 	return unitFile{caddyUnit, b.String()}
-}
-
-func (o *Orchestrator) serviceUnit(s *Service, svc *protocol.Service) unitFile {
-	var b strings.Builder
-	fmt.Fprintf(&b, "[Unit]\nDescription=proxy-deploy %s\nAfter=network-online.target %s\nWants=network-online.target\n\n", s.Cfg.Name, caddyUnit)
-	b.WriteString("[Service]\n")
-	fmt.Fprintf(&b, "ExecStart=%s\n", execLine(svc.Args))
-	b.WriteString("Restart=on-failure\nRestartSec=5\n")
-	if !o.layout.User {
-		b.WriteString("LimitNOFILE=1048576\n")
-	}
-	fmt.Fprintf(&b, "\n[Install]\nWantedBy=%s\n", o.wantedBy())
-	return unitFile{s.Unit, b.String()}
 }
 
 // execLine 把参数拼成 ExecStart 行：转义 systemd 的 % 说明符和 $ 变量，按需加引号

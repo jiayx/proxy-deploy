@@ -91,6 +91,21 @@ func run(ctx context.Context, cmd string, rest []string, layout *paths.Layout,
 			}
 			fmt.Printf("  %s %-40s %s\n", mark, u.Unit, u.State)
 		}
+		fmt.Println("协议后端:")
+		if backends, err := orch.Backends(ctx); err != nil {
+			fmt.Printf("  ✗ 读取状态失败：%v\n", err)
+		} else {
+			for _, b := range backends {
+				mark, detail := "✓", fmt.Sprintf("pid %d，已运行 %s", b.PID, (time.Duration(b.Uptime)*time.Second).String())
+				if b.State != "running" {
+					mark, detail = "✗", b.LastExit
+				}
+				if b.Restarts > 0 {
+					detail += fmt.Sprintf("，重启过 %d 次", b.Restarts)
+				}
+				fmt.Printf("  %s %-40s %s（%s）\n", mark, b.Name, b.State, detail)
+			}
+		}
 		fmt.Println("证书:")
 		for _, c := range certs {
 			if c.Err != nil {
