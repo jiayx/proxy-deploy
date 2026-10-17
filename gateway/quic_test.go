@@ -32,7 +32,7 @@ func TestInitialKeysRFC9001(t *testing.T) {
 }
 
 // captureInitials 用 quic-go 客户端向一个只收不回的 UDP 端口发起连接，返回收到的数据报
-func captureInitials(t *testing.T, version quic.Version, sni string) [][]byte {
+func captureInitials(t testing.TB, version quic.Version, sni string) [][]byte {
 	t.Helper()
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
@@ -63,7 +63,7 @@ func captureInitials(t *testing.T, version quic.Version, sni string) [][]byte {
 }
 
 // assemble 依次喂入数据报，返回解析出的 ClientHello 和用到的数据报数
-func assemble(t *testing.T, datagrams [][]byte) (*tls.ClientHelloInfo, int) {
+func assemble(t testing.TB, datagrams [][]byte) (*tls.ClientHelloInfo, int) {
 	t.Helper()
 	var a cryptoAssembler
 	for i, d := range datagrams {
