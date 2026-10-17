@@ -6,6 +6,7 @@ type DeployConfig struct {
 	Server       ServerConfig      `yaml:"server"`
 	Certificates CertificateConfig `yaml:"certificates"`
 	Entry        EntryConfig       `yaml:"entry"`
+	Users        []UserConfig      `yaml:"users"`
 	Protocols    []ProtocolConfig  `yaml:"protocols"`
 	Web          []WebConfig       `yaml:"web"`
 }
@@ -29,6 +30,12 @@ type CertificateConfig struct {
 type EntryConfig struct {
 	HTTPSPort int `yaml:"https_port,omitempty"`
 	HTTPPort  int `yaml:"http_port,omitempty"`
+}
+
+// UserConfig 是一个用户。各协议的密码、UUID、密钥都由 Secret 推导，更换 Secret 即作废旧凭据
+type UserConfig struct {
+	Name   string `yaml:"name"`
+	Secret string `yaml:"secret"`
 }
 
 // ProtocolConfig 协议配置
@@ -58,6 +65,7 @@ type Certificate struct {
 
 // ClientConfig 客户端连接信息
 type ClientConfig struct {
+	User     string
 	Protocol string
 	URI      string
 	Notes    []string

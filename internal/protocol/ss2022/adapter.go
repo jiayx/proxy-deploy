@@ -24,11 +24,11 @@ const (
 	defaultMethod = "2022-blake3-aes-128-gcm"
 )
 
-// keyLengths 是各加密方式要求的密钥字节数
+// keyLengths 是各加密方式要求的密钥字节数。多用户（SIP022 的 EIH）只支持 AES，
+// 所以不提供 2022-blake3-chacha20-poly1305
 var keyLengths = map[string]int{
-	"2022-blake3-aes-128-gcm":       16,
-	"2022-blake3-aes-256-gcm":       32,
-	"2022-blake3-chacha20-poly1305": 32,
+	"2022-blake3-aes-128-gcm": 16,
+	"2022-blake3-aes-256-gcm": 32,
 }
 
 type Adapter struct {
@@ -64,21 +64,32 @@ func (a *Adapter) Validate(cfg *config.ProtocolConfig) error {
 	m := method(cfg)
 	n, ok := keyLengths[m]
 	if !ok {
-		return fmt.Errorf("config.method 只支持 2022-blake3-aes-128-gcm、2022-blake3-aes-256-gcm、2022-blake3-chacha20-poly1305")
+		return fmt.Errorf("config.method 只支持 2022-blake3-aes-128-gcm、2022-blake3-aes-256-gcm（多用户不支持 chacha20）")
 	}
 	key, err := base64.StdEncoding.DecodeString(protocol.StringOption(cfg, "password"))
 	if err != nil || len(key) != n {
-		return fmt.Errorf("config.password 必须是 %d 字节随机密钥的 base64 编码（%s；proxyd init-config 会生成）", n, m)
+		return fmt.Errorf("config.password（服务端密钥）必须是 %d 字节随机密钥的 base64 编码（%s；proxyd init-config 会生成）", n, m)
 	}
 	return nil
 }
 
+// userKey 返回用户的密钥，长度与服务端密钥相同
+func userKey(cfg *config.ProtocolConfig, u protocol.User) string {
+	return u.Key(name, keyLengths[method(cfg)])
+}
+
+// GenerateConfig 使用多用户格式：config.password 是服务端密钥，每个用户另有自己的密钥
 func (a *Adapter) GenerateConfig(cfg *config.ProtocolConfig, rt protocol.Runtime) ([]byte, error) {
+	var users []any
+	for _, u := range rt.Users {
+		users = append(users, map[string]any{"name": u.Name, "password": userKey(cfg, u)})
+	}
 	return singbox.Config(rt.ListenAddr, map[string]any{
 		"type":     "shadowsocks",
 		"tag":      name,
 		"method":   method(cfg),
 		"password": protocol.StringOption(cfg, "password"),
+		"users":    users,
 	})
 }
 
@@ -86,13 +97,14 @@ func (a *Adapter) Service(cfg *config.ProtocolConfig, rt protocol.Runtime) (*pro
 	return &protocol.Service{Args: singbox.Args(a.layout, a.ConfigPath())}, nil
 }
 
-// ClientConfig 返回 SIP002 格式的链接；按 SIP022，2022 加密方式的 userinfo 使用百分号编码而非 base64
+// ClientConfig 返回 SIP002 格式的链接；按 SIP022，2022 加密方式的 userinfo 使用百分号编码而非 base64，
+// 多用户时客户端密码为 "服务端密钥:用户密钥"
 func (a *Adapter) ClientConfig(cfg *config.ProtocolConfig, c protocol.ClientContext) (*config.ClientConfig, error) {
 	u := url.URL{
 		Scheme:   "ss",
-		User:     url.UserPassword(method(cfg), protocol.StringOption(cfg, "password")),
+		User:     url.UserPassword(method(cfg), protocol.StringOption(cfg, "password")+":"+userKey(cfg, c.User)),
 		Host:     net.JoinHostPort(c.Host, strconv.Itoa(c.Port)),
-		Fragment: name,
+		Fragment: protocol.LinkName(name, c.User),
 	}
 	return &config.ClientConfig{Protocol: name, URI: u.String()}, nil
 }

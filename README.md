@@ -71,7 +71,7 @@ sudo ./proxyd status
 
 ## 配置
 
-`init-config` 输出的默认配置等价于：
+`init-config` 输出的默认配置等价于（另有 `vless-reality`、`tuic`、`ss2022` 三个默认不启用的协议）：
 
 ```yaml
 domain: example.com
@@ -87,16 +87,16 @@ entry:
   https_port: 443
   http_port: 80
 
+users:
+  - name: default
+    secret: "<随机生成>"
+
 protocols:
   - name: hysteria2
     enabled: true
-    config:
-      password: "<随机生成>"
 
   - name: anytls
     enabled: true
-    config:
-      password: "<随机生成>"
 
 web:
   - name: site
@@ -112,15 +112,15 @@ web:
 | `protocols[].enabled` | 只有显式设为 `true` 才启用 |
 | `protocols[].port` | 公网端口，默认使用 `entry.https_port`；`ss2022` 必填，且不能与入口端口或其他协议的端口相同 |
 | `protocols[].sni` | 默认 `<name>.<domain>`（`vless-reality` 默认 `www.microsoft.com`）；TCP 协议的 SNI 必须与主域名及网站 `host` 不同 |
-| `protocols[].config.password` | 两种协议均必填，不能是占位值 `change-me` |
+| `users[].name` | 用户名，1–32 个字母、数字、`-`、`_`，不能重复；至少一个用户 |
+| `users[].secret` | 至少 16 个字符，不能重复。各协议的密码、UUID、密钥都由它推导，所以新增协议时每个用户自动拥有凭据；更换即作废该用户的全部旧凭据 |
 | `anytls` 的 `config.padding_scheme` | 可选，填充方案，多行字符串或字符串列表，每行一条规则；格式同 sing-box anytls inbound |
 | `hysteria2` 的 `config.masquerade_url` | 可选，覆盖默认的内部伪装网站地址 |
-| `vless-reality` 的 `config.uuid` / `private_key` / `short_id` | 必填，`init-config` 会生成；公钥由私钥推导，出现在客户端链接中 |
+| `vless-reality` 的 `config.private_key` / `short_id` | 必填，`init-config` 会生成；公钥由私钥推导，出现在客户端链接中 |
 | `vless-reality` 的 `config.handshake` | 可选，伪装握手的目标 `host:port`，默认是 `sni` 的 443 端口 |
-| `tuic` 的 `config.uuid` / `password` | 必填，`init-config` 会生成 |
 | `tuic` 的 `config.congestion_control` | 可选，`bbr`（默认）、`cubic` 或 `new_reno` |
-| `ss2022` 的 `config.method` | 可选，`2022-blake3-aes-128-gcm`（默认）、`2022-blake3-aes-256-gcm` 或 `2022-blake3-chacha20-poly1305` |
-| `ss2022` 的 `config.password` | 必填，随机密钥的 base64 编码，aes-128 为 16 字节、其余为 32 字节；`init-config` 会生成 16 字节密钥 |
+| `ss2022` 的 `config.method` | 可选，`2022-blake3-aes-128-gcm`（默认）或 `2022-blake3-aes-256-gcm`；多用户（SIP022 EIH）只支持 AES |
+| `ss2022` 的 `config.password` | 必填，服务端密钥：随机密钥的 base64 编码，aes-128 为 16 字节、aes-256 为 32 字节；`init-config` 会生成。每个用户另有由 `secret` 推导的密钥，客户端密码为 `服务端密钥:用户密钥` |
 
 每种协议只能配置一个实例（重复的 `name` 会被拒绝）：配置路径和后端进程都按协议名标识。配置中出现未知字段（例如拼错的字段名）时加载直接报错。
 
@@ -171,7 +171,7 @@ web:
 | `init-config` | 向标准输出写入示例配置 | 否 |
 | `plan` | 显示入口、协议、证书和规划冲突 | 是 |
 | `deploy` | 安装、更新并启动服务，输出客户端 URI | 是 |
-| `client-config` | 根据当前 YAML 生成客户端 URI | 是 |
+| `client-config [用户]` | 根据当前 YAML 生成客户端 URI，按用户分组；指定用户时只输出该用户的 | 是 |
 | `status` | 查看已安装服务状态与证书有效期 | 否，读取安装清单 |
 | `logs <服务>` | `caddy` 查看整个服务的日志（含网关连接日志），协议名只看该协议后端的输出 | 否，读取安装清单 |
 | `restart [服务]` | 不指定或 `caddy` 时重启整个服务，指定协议名时只重启该协议的后端进程 | 否，读取安装清单 |

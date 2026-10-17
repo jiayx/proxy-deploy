@@ -33,26 +33,36 @@ func TestExampleLoads(t *testing.T) {
 	if len(cfg.Protocols) != 5 || strings.Join(enabled, ",") != "hysteria2,anytls" {
 		t.Fatalf("want 5 protocols with hysteria2 and anytls enabled, got %+v", cfg.Protocols)
 	}
-	p0, p1 := cfg.Protocols[0].Config["password"], cfg.Protocols[1].Config["password"]
-	if p0 == "" || p0 == "change-me" || p0 == p1 {
-		t.Fatalf("example passwords should be random and distinct: %v %v", p0, p1)
+	if len(cfg.Users) != 1 || cfg.Users[0].Name != "default" || len(cfg.Users[0].Secret) < 16 {
+		t.Fatalf("example should have one default user with a generated secret: %+v", cfg.Users)
+	}
+	if other, _ := Load(writeConfig(t, Example())); other.Users[0].Secret == cfg.Users[0].Secret {
+		t.Fatal("example secrets should be random")
 	}
 }
 
+// users 是测试配置共用的用户块
+const users = "users: [{name: alice, secret: alice-secret-0123456789}]\n"
+
 func TestLoadErrors(t *testing.T) {
 	cases := map[string]struct{ yaml, want string }{
-		"unknown field": {"domain: a.com\ncertificates: {provider: internal}\nentyr: {}\n", "entyr"},
+		"no users":         {"domain: a.com\ncertificates: {provider: internal}\n", "at least one user"},
+		"bad user name":    {"domain: a.com\ncertificates: {provider: internal}\nusers: [{name: 'a b', secret: 0123456789abcdef}]\n", "name"},
+		"short secret":     {"domain: a.com\ncertificates: {provider: internal}\nusers: [{name: a, secret: short}]\n", "secret"},
+		"duplicate user":   {"domain: a.com\ncertificates: {provider: internal}\nusers: [{name: a, secret: 0123456789abcdef}, {name: a, secret: fedcba9876543210}]\n", "duplicate"},
+		"duplicate secret": {"domain: a.com\ncertificates: {provider: internal}\nusers: [{name: a, secret: 0123456789abcdef}, {name: b, secret: 0123456789abcdef}]\n", "duplicate"},
+		"unknown field":    {"domain: a.com\ncertificates: {provider: internal}\nentyr: {}\n", "entyr"},
 		"duplicate protocol": {`domain: a.com
 certificates: {provider: internal}
-protocols:
+` + users + `protocols:
   - {name: anytls}
   - {name: anytls}
 `, "duplicate"},
-		"bad port":               {"domain: a.com\ncertificates: {provider: internal}\nentry: {https_port: 70000}\n", "invalid port"},
+		"bad port":               {"domain: a.com\ncertificates: {provider: internal}\nentry: {https_port: 70000}\n" + users, "invalid port"},
 		"missing email":          {"domain: a.com\n", "email"},
 		"missing domain":         {"certificates: {provider: internal}\n", "domain"},
 		"acme without ca":        {"domain: a.com\ncertificates: {provider: acme, email: a@a.com}\n", "ca"},
-		"proxy without upstream": {"domain: a.com\ncertificates: {provider: internal}\nweb: [{name: x, type: reverse_proxy}]\n", "upstream"},
+		"proxy without upstream": {"domain: a.com\ncertificates: {provider: internal}\nweb: [{name: x, type: reverse_proxy}]\n" + users, "upstream"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

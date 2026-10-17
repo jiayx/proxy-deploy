@@ -39,9 +39,6 @@ func (a *Adapter) ConfigPath() string {
 }
 
 func (a *Adapter) Validate(cfg *config.ProtocolConfig) error {
-	if err := protocol.RequirePassword(cfg); err != nil {
-		return err
-	}
 	_, err := paddingScheme(cfg)
 	return err
 }
@@ -74,11 +71,11 @@ func (a *Adapter) CheckConfig(ctx context.Context, path string) error {
 }
 
 func (a *Adapter) GenerateConfig(cfg *config.ProtocolConfig, rt protocol.Runtime) ([]byte, error) {
-	inbound := map[string]any{
-		"type":  "anytls",
-		"tag":   name,
-		"users": []any{map[string]any{"name": "default", "password": protocol.StringOption(cfg, "password")}},
+	var users []any
+	for _, u := range rt.Users {
+		users = append(users, map[string]any{"name": u.Name, "password": u.Password(name)})
 	}
+	inbound := map[string]any{"type": "anytls", "tag": name, "users": users}
 	scheme, err := paddingScheme(cfg)
 	if err != nil {
 		return nil, err
@@ -101,11 +98,11 @@ func (a *Adapter) ClientConfig(cfg *config.ProtocolConfig, c protocol.ClientCont
 	}
 	u := url.URL{
 		Scheme:   "anytls",
-		User:     url.User(protocol.StringOption(cfg, "password")),
+		User:     url.User(c.User.Password(name)),
 		Host:     net.JoinHostPort(c.Host, strconv.Itoa(c.Port)),
 		Path:     "/",
 		RawQuery: q.Encode(),
-		Fragment: name,
+		Fragment: protocol.LinkName(name, c.User),
 	}
 	return &config.ClientConfig{Protocol: name, URI: u.String()}, nil
 }

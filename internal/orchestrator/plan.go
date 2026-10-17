@@ -289,6 +289,7 @@ func (o *Orchestrator) Plan() *Plan {
 	}
 	for _, svc := range p.Services {
 		svc.Runtime.SiteURL = "http://" + sitePlainAddr
+		svc.Runtime.Users = users(c)
 		svc.Runtime.SNI = svc.SNI
 		if cc, ok := svc.Adapter.(protocol.CertConsumer); ok && cc.NeedsCertificate() {
 			for i := range p.Certs {
@@ -349,30 +350,60 @@ func (o *Orchestrator) Plan() *Plan {
 }
 
 // ClientConfigs 返回各协议的客户端连接信息
-func (o *Orchestrator) ClientConfigs(p *Plan) ([]*config.ClientConfig, error) {
+// ClientConfigs 返回各用户在各协议下的客户端连接信息；user 非空时只返回该用户的
+func (o *Orchestrator) ClientConfigs(p *Plan, user string) ([]*config.ClientConfig, error) {
 	insecure := p.Caddy.Issuer.Kind == "internal"
 	var out []*config.ClientConfig
-	for _, s := range p.Services {
-		cc, err := s.Adapter.ClientConfig(s.Cfg, protocol.ClientContext{
-			Host:     o.cfg.Server.Address,
-			Port:     s.PublicPort,
-			SNI:      s.SNI,
-			Insecure: insecure,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", s.Cfg.Name, err)
+	found := false
+	for _, u := range users(o.cfg) {
+		if user != "" && u.Name != user {
+			continue
 		}
-		if s.Dedicated {
-			cc.Notes = append(cc.Notes, fmt.Sprintf("%s/%d（专用端口）", strings.ToUpper(s.Network), s.PublicPort))
-		} else {
-			cc.Notes = append(cc.Notes, fmt.Sprintf("%s/%d，SNI %s", strings.ToUpper(s.Network), s.PublicPort, s.SNI))
+		found = true
+		for _, s := range p.Services {
+			cc, err := o.clientConfig(s, u, insecure)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, cc)
 		}
-		if insecure && !s.Dedicated && !s.Passthrough {
-			cc.Notes = append(cc.Notes, "证书由内部 CA 签发，客户端需要跳过证书校验")
-		}
-		out = append(out, cc)
+	}
+	if !found {
+		return nil, fmt.Errorf("未知用户 %q", user)
 	}
 	return out, nil
+}
+
+func (o *Orchestrator) clientConfig(s *Service, u protocol.User, insecure bool) (*config.ClientConfig, error) {
+	cc, err := s.Adapter.ClientConfig(s.Cfg, protocol.ClientContext{
+		User:     u,
+		Host:     o.cfg.Server.Address,
+		Port:     s.PublicPort,
+		SNI:      s.SNI,
+		Insecure: insecure,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", s.Cfg.Name, err)
+	}
+	cc.User = u.Name
+	if s.Dedicated {
+		cc.Notes = append(cc.Notes, fmt.Sprintf("%s/%d（专用端口）", strings.ToUpper(s.Network), s.PublicPort))
+	} else {
+		cc.Notes = append(cc.Notes, fmt.Sprintf("%s/%d，SNI %s", strings.ToUpper(s.Network), s.PublicPort, s.SNI))
+	}
+	if insecure && !s.Dedicated && !s.Passthrough {
+		cc.Notes = append(cc.Notes, "证书由内部 CA 签发，客户端需要跳过证书校验")
+	}
+	return cc, nil
+}
+
+// users 把配置中的用户转换为适配器使用的形式
+func users(c *config.DeployConfig) []protocol.User {
+	out := make([]protocol.User, 0, len(c.Users))
+	for _, u := range c.Users {
+		out = append(out, protocol.User{Name: u.Name, Secret: u.Secret})
+	}
+	return out
 }
 
 // checkPortFree 尝试绑定地址，判断是否被其他进程占用

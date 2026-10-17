@@ -51,15 +51,9 @@ func (a *Adapter) CheckConfig(ctx context.Context, path string) error {
 	return singbox.Check(ctx, a.layout, path)
 }
 
-var (
-	uuidPattern    = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
-	shortIDPattern = regexp.MustCompile(`^([0-9a-f]{2}){0,8}$`)
-)
+var shortIDPattern = regexp.MustCompile(`^([0-9a-f]{2}){0,8}$`)
 
 func (a *Adapter) Validate(cfg *config.ProtocolConfig) error {
-	if !uuidPattern.MatchString(protocol.StringOption(cfg, "uuid")) {
-		return fmt.Errorf("config.uuid 必须是 UUID（proxyd init-config 会生成）")
-	}
 	if _, err := secrets.RealityPublicKey(protocol.StringOption(cfg, "private_key")); err != nil {
 		return fmt.Errorf("config.private_key：%v（proxyd init-config 会生成）", err)
 	}
@@ -87,10 +81,14 @@ func handshake(cfg *config.ProtocolConfig, sni string) (string, int) {
 
 func (a *Adapter) GenerateConfig(cfg *config.ProtocolConfig, rt protocol.Runtime) ([]byte, error) {
 	host, port := handshake(cfg, rt.SNI)
+	var users []any
+	for _, u := range rt.Users {
+		users = append(users, map[string]any{"name": u.Name, "uuid": u.UUID(name), "flow": flow})
+	}
 	return singbox.Config(rt.ListenAddr, map[string]any{
 		"type":  "vless",
 		"tag":   name,
-		"users": []any{map[string]any{"name": "default", "uuid": protocol.StringOption(cfg, "uuid"), "flow": flow}},
+		"users": users,
 		"tls": map[string]any{
 			"enabled":     true,
 			"server_name": rt.SNI,
@@ -124,10 +122,10 @@ func (a *Adapter) ClientConfig(cfg *config.ProtocolConfig, c protocol.ClientCont
 	q.Set("type", "tcp")
 	u := url.URL{
 		Scheme:   "vless",
-		User:     url.User(protocol.StringOption(cfg, "uuid")),
+		User:     url.User(c.User.UUID(name)),
 		Host:     net.JoinHostPort(c.Host, strconv.Itoa(c.Port)),
 		RawQuery: q.Encode(),
-		Fragment: name,
+		Fragment: protocol.LinkName(name, c.User),
 	}
 	return &config.ClientConfig{Protocol: name, URI: u.String(),
 		Notes: []string{"Reality 使用伪装目标网站的 SNI，客户端不校验本服务器的证书"}}, nil

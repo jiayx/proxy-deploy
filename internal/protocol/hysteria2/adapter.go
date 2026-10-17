@@ -37,10 +37,6 @@ func (a *Adapter) ConfigPath() string {
 	return filepath.Join(a.layout.ProtocolDir(name), "config.json")
 }
 
-func (a *Adapter) Validate(cfg *config.ProtocolConfig) error {
-	return protocol.RequirePassword(cfg)
-}
-
 func (a *Adapter) Install(ctx context.Context) error { return singbox.Install(ctx, a.layout) }
 
 func (a *Adapter) CheckConfig(ctx context.Context, path string) error {
@@ -57,10 +53,14 @@ func (a *Adapter) GenerateConfig(cfg *config.ProtocolConfig, rt protocol.Runtime
 		masquerade["url"] = u
 		masquerade["rewrite_host"] = true
 	}
+	var users []any
+	for _, u := range rt.Users {
+		users = append(users, map[string]any{"name": u.Name, "password": u.Password(name)})
+	}
 	return singbox.Config(rt.ListenAddr, map[string]any{
 		"type":  "hysteria2",
 		"tag":   name,
-		"users": []any{map[string]any{"name": "default", "password": protocol.StringOption(cfg, "password")}},
+		"users": users,
 		"tls": map[string]any{
 			"enabled":          true,
 			"alpn":             []string{"h3"},
@@ -83,11 +83,11 @@ func (a *Adapter) ClientConfig(cfg *config.ProtocolConfig, c protocol.ClientCont
 	}
 	u := url.URL{
 		Scheme:   "hysteria2",
-		User:     url.User(protocol.StringOption(cfg, "password")),
+		User:     url.User(c.User.Password(name)),
 		Host:     net.JoinHostPort(c.Host, strconv.Itoa(c.Port)),
 		Path:     "/",
 		RawQuery: q.Encode(),
-		Fragment: name,
+		Fragment: protocol.LinkName(name, c.User),
 	}
 	return &config.ClientConfig{Protocol: name, URI: u.String()}, nil
 }

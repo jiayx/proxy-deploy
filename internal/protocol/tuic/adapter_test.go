@@ -8,11 +8,15 @@ import (
 	"github.com/jiayx/proxy-deploy/internal/config"
 	"github.com/jiayx/proxy-deploy/internal/protocol"
 	"github.com/jiayx/proxy-deploy/pkg/paths"
-	"github.com/jiayx/proxy-deploy/pkg/secrets"
+)
+
+var (
+	alice = protocol.User{Name: "alice", Secret: "alice-secret-0123456789"}
+	bob   = protocol.User{Name: "bob", Secret: "bob-secret-0123456789"}
 )
 
 func newConfig() *config.ProtocolConfig {
-	return &config.ProtocolConfig{Name: name, Config: map[string]any{"uuid": secrets.UUID(), "password": "p@ss/word"}}
+	return &config.ProtocolConfig{Name: name, Config: map[string]any{}}
 }
 
 func TestValidate(t *testing.T) {
@@ -20,19 +24,17 @@ func TestValidate(t *testing.T) {
 	if err := a.Validate(newConfig()); err != nil {
 		t.Fatal(err)
 	}
-	for field, bad := range map[string]string{"uuid": "x", "password": "", "congestion_control": "vegas"} {
-		c := newConfig()
-		c.Config[field] = bad
-		if a.Validate(c) == nil {
-			t.Errorf("%s=%q should be rejected", field, bad)
-		}
+	c := newConfig()
+	c.Config["congestion_control"] = "vegas"
+	if a.Validate(c) == nil {
+		t.Error("unknown congestion control should be rejected")
 	}
 }
 
 func TestGenerateConfig(t *testing.T) {
 	a := New(paths.New("/opt/pd", false))
 	cfg := newConfig()
-	rt := protocol.Runtime{ListenAddr: "127.0.0.1:20005", Cert: &config.Certificate{CertPath: "/c.crt", KeyPath: "/c.key"}}
+	rt := protocol.Runtime{ListenAddr: "127.0.0.1:20005", Users: []protocol.User{alice, bob}, Cert: &config.Certificate{CertPath: "/c.crt", KeyPath: "/c.key"}}
 	data, err := a.GenerateConfig(cfg, rt)
 	if err != nil {
 		t.Fatal(err)
@@ -40,9 +42,11 @@ func TestGenerateConfig(t *testing.T) {
 	var out struct{ Inbounds []map[string]any }
 	json.Unmarshal(data, &out)
 	in := out.Inbounds[0]
-	user := in["users"].([]any)[0].(map[string]any)
+	users := in["users"].([]any)
+	user := users[1].(map[string]any)
 	tls := in["tls"].(map[string]any)
-	if in["type"] != "tuic" || in["congestion_control"] != "bbr" || user["uuid"] != cfg.Config["uuid"] ||
+	if in["type"] != "tuic" || in["congestion_control"] != "bbr" || len(users) != 2 || user["name"] != "bob" ||
+		user["uuid"] != bob.UUID(name) || user["password"] != bob.Password(name) ||
 		tls["certificate_path"] != "/c.crt" || tls["alpn"].([]any)[0] != "h3" {
 		t.Fatalf("unexpected inbound: %s", data)
 	}
@@ -54,11 +58,11 @@ func TestGenerateConfig(t *testing.T) {
 func TestClientConfig(t *testing.T) {
 	a := New(paths.New("/opt/pd", false))
 	cfg := newConfig()
-	cc, _ := a.ClientConfig(cfg, protocol.ClientContext{Host: "1.2.3.4", Port: 443, SNI: "tuic.a.com", Insecure: true})
+	cc, _ := a.ClientConfig(cfg, protocol.ClientContext{User: alice, Host: "1.2.3.4", Port: 443, SNI: "tuic.a.com", Insecure: true})
 	u, _ := url.Parse(cc.URI)
 	pass, _ := u.User.Password()
 	q := u.Query()
-	if u.Scheme != "tuic" || u.User.Username() != cfg.Config["uuid"] || pass != "p@ss/word" ||
+	if u.Scheme != "tuic" || u.User.Username() != alice.UUID(name) || pass != alice.Password(name) || u.Fragment != "tuic-alice" ||
 		q.Get("sni") != "tuic.a.com" || q.Get("alpn") != "h3" || q.Get("allow_insecure") != "1" {
 		t.Fatalf("unexpected URI %s", cc.URI)
 	}

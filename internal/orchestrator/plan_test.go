@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/jiayx/proxy-deploy/internal/config"
+	"github.com/jiayx/proxy-deploy/internal/protocol"
 	"github.com/jiayx/proxy-deploy/internal/protocol/builtin"
 	"github.com/jiayx/proxy-deploy/pkg/paths"
 	"github.com/jiayx/proxy-deploy/pkg/secrets"
@@ -35,7 +36,11 @@ func baseConfig(protocols ...config.ProtocolConfig) *config.DeployConfig {
 	return &config.DeployConfig{
 		Domain:       "example.com",
 		Certificates: config.CertificateConfig{Provider: "internal"},
-		Protocols:    protocols,
+		Users: []config.UserConfig{
+			{Name: "alice", Secret: "alice-secret-0123456789"},
+			{Name: "bob", Secret: "bob-secret-0123456789"},
+		},
+		Protocols: protocols,
 	}
 }
 
@@ -88,10 +93,7 @@ func TestPlanConflicts(t *testing.T) {
 		cfg  *config.DeployConfig
 		want string
 	}{
-		"unknown protocol": {baseConfig(proto("vless")), "未知协议"},
-		"placeholder password": {baseConfig(proto("anytls", func(p *config.ProtocolConfig) {
-			p.Config["password"] = "change-me"
-		})), "change-me"},
+		"unknown protocol":  {baseConfig(proto("vless")), "未知协议"},
 		"tcp on http port":  {baseConfig(proto("anytls", func(p *config.ProtocolConfig) { p.Port = 80 })), "HTTP 入口端口"},
 		"sni equals domain": {baseConfig(proto("anytls", func(p *config.ProtocolConfig) { p.SNI = "example.com" })), "网站域名"},
 	}
@@ -254,14 +256,33 @@ func TestPlanTCPOnSeparatePort(t *testing.T) {
 	}
 }
 
-func TestClientConfigsInsecureForInternalCA(t *testing.T) {
-	o := newOrch(t, baseConfig(proto("anytls")))
-	ccs, err := o.ClientConfigs(o.Plan())
+func TestClientConfigsPerUser(t *testing.T) {
+	o := newOrch(t, baseConfig(proto("anytls"), proto("hysteria2")))
+	p := o.Plan()
+	ccs, err := o.ClientConfigs(p, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "anytls://secret@example.com:443/?insecure=1&sni=anytls.example.com#anytls"
-	if len(ccs) != 1 || ccs[0].URI != want {
-		t.Fatalf("got %+v, want %s", ccs, want)
+	if len(ccs) != 4 || ccs[0].User != "alice" || ccs[2].User != "bob" {
+		t.Fatalf("want 2 links per user, got %+v", ccs)
+	}
+	alice := protocol.User{Name: "alice", Secret: "alice-secret-0123456789"}
+	want := "anytls://" + alice.Password("anytls") + "@example.com:443/?insecure=1&sni=anytls.example.com#anytls-alice"
+	if ccs[0].URI != want {
+		t.Fatalf("got %s, want %s", ccs[0].URI, want)
+	}
+	if ccs[0].URI == ccs[2].URI {
+		t.Fatal("users must get different credentials")
+	}
+
+	only, err := o.ClientConfigs(p, "bob")
+	if err != nil || len(only) != 2 || only[0].User != "bob" {
+		t.Fatalf("filter by user: %+v %v", only, err)
+	}
+	if _, err := o.ClientConfigs(p, "carol"); err == nil {
+		t.Fatal("unknown user should fail")
+	}
+	if got := p.Services[0].Runtime.Users; len(got) != 2 || got[1].Name != "bob" {
+		t.Fatalf("runtime should carry all users: %+v", got)
 	}
 }

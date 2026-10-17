@@ -9,10 +9,16 @@ import (
 	"github.com/jiayx/proxy-deploy/pkg/paths"
 )
 
+var (
+	alice = protocol.User{Name: "alice", Secret: "alice-secret-0123456789"}
+	bob   = protocol.User{Name: "bob", Secret: "bob-secret-0123456789"}
+)
+
 func TestGenerateConfig(t *testing.T) {
 	a := New(paths.New("/opt/pd", false))
-	cfg := &config.ProtocolConfig{Name: name, Config: map[string]any{"password": "secret"}}
+	cfg := &config.ProtocolConfig{Name: name, Config: map[string]any{}}
 	rt := protocol.Runtime{
+		Users:      []protocol.User{alice, bob},
 		ListenAddr: ":443",
 		SiteURL:    "http://127.0.0.1:20001",
 		Cert:       &config.Certificate{Name: "h.a.com", CertPath: "/c.crt", KeyPath: "/c.key"},
@@ -39,7 +45,8 @@ func TestGenerateConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	in := out.Inbounds[0]
-	if in.Type != "hysteria2" || in.Listen != "::" || in.ListenPort != 443 || in.Users[0]["password"] != "secret" {
+	if in.Type != "hysteria2" || in.Listen != "::" || in.ListenPort != 443 || len(in.Users) != 2 ||
+		in.Users[0]["name"] != "alice" || in.Users[0]["password"] != alice.Password(name) {
 		t.Fatalf("unexpected inbound: %s", data)
 	}
 	if !in.TLS.Enabled || in.TLS.CertificatePath != "/c.crt" || in.TLS.KeyPath != "/c.key" {

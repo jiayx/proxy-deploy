@@ -23,7 +23,7 @@ const usage = `用法: proxyd [选项] <命令>
   init-config      输出示例 deploy.yaml
   plan             检查配置，显示入口规划（不做任何变更）
   deploy           安装并启动全部服务（可重复执行以更新）
-  client-config    输出客户端连接 URI
+  client-config [用户]  输出客户端连接 URI（默认全部用户）
   status           查看服务状态和证书有效期
   logs <服务>      查看日志（caddy 或协议名）
   restart [服务]   重启全部或指定服务
@@ -176,9 +176,13 @@ func run(ctx context.Context, cmd string, rest []string, layout *paths.Layout,
 			return err
 		}
 		fmt.Println("\n部署完成。客户端配置:")
-		return printClients(orch, plan)
+		return printClients(orch, plan, "")
 	case "client-config":
-		return printClients(orch, plan)
+		user := ""
+		if len(rest) > 0 {
+			user = rest[0]
+		}
+		return printClients(orch, plan, user)
 	}
 	return fmt.Errorf("未知命令 %q", cmd)
 }
@@ -271,12 +275,17 @@ func printPlan(p *orchestrator.Plan) {
 	}
 }
 
-func printClients(orch *orchestrator.Orchestrator, p *orchestrator.Plan) error {
-	ccs, err := orch.ClientConfigs(p)
+func printClients(orch *orchestrator.Orchestrator, p *orchestrator.Plan, user string) error {
+	ccs, err := orch.ClientConfigs(p, user)
 	if err != nil {
 		return err
 	}
+	last := ""
 	for _, cc := range ccs {
+		if cc.User != last {
+			fmt.Printf("== 用户 %s\n", cc.User)
+			last = cc.User
+		}
 		fmt.Printf("[%s]\n  %s\n", cc.Protocol, cc.URI)
 		for _, n := range cc.Notes {
 			fmt.Printf("  · %s\n", n)

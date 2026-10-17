@@ -10,7 +10,6 @@ import (
 	"net"
 	"net/url"
 	"path/filepath"
-	"regexp"
 	"strconv"
 
 	"github.com/jiayx/proxy-deploy/internal/config"
@@ -24,10 +23,7 @@ const (
 	alpn = "h3"
 )
 
-var (
-	uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
-	congestion  = map[string]bool{"bbr": true, "cubic": true, "new_reno": true}
-)
+var congestion = map[string]bool{"bbr": true, "cubic": true, "new_reno": true}
 
 type Adapter struct {
 	layout *paths.Layout
@@ -52,12 +48,6 @@ func (a *Adapter) CheckConfig(ctx context.Context, path string) error {
 }
 
 func (a *Adapter) Validate(cfg *config.ProtocolConfig) error {
-	if !uuidPattern.MatchString(protocol.StringOption(cfg, "uuid")) {
-		return fmt.Errorf("config.uuid 必须是 UUID（proxyd init-config 会生成）")
-	}
-	if err := protocol.RequirePassword(cfg); err != nil {
-		return err
-	}
 	if cc := protocol.StringOption(cfg, "congestion_control"); cc != "" && !congestion[cc] {
 		return fmt.Errorf("config.congestion_control 只能是 bbr、cubic 或 new_reno")
 	}
@@ -75,14 +65,14 @@ func (a *Adapter) GenerateConfig(cfg *config.ProtocolConfig, rt protocol.Runtime
 	if rt.Cert == nil {
 		return nil, fmt.Errorf("tuic: certificate is required")
 	}
+	var users []any
+	for _, u := range rt.Users {
+		users = append(users, map[string]any{"name": u.Name, "uuid": u.UUID(name), "password": u.Password(name)})
+	}
 	return singbox.Config(rt.ListenAddr, map[string]any{
-		"type": "tuic",
-		"tag":  name,
-		"users": []any{map[string]any{
-			"name":     "default",
-			"uuid":     protocol.StringOption(cfg, "uuid"),
-			"password": protocol.StringOption(cfg, "password"),
-		}},
+		"type":               "tuic",
+		"tag":                name,
+		"users":              users,
 		"congestion_control": congestionControl(cfg),
 		"tls": map[string]any{
 			"enabled":          true,
@@ -109,10 +99,10 @@ func (a *Adapter) ClientConfig(cfg *config.ProtocolConfig, c protocol.ClientCont
 	}
 	u := url.URL{
 		Scheme:   "tuic",
-		User:     url.UserPassword(protocol.StringOption(cfg, "uuid"), protocol.StringOption(cfg, "password")),
+		User:     url.UserPassword(c.User.UUID(name), c.User.Password(name)),
 		Host:     net.JoinHostPort(c.Host, strconv.Itoa(c.Port)),
 		RawQuery: q.Encode(),
-		Fragment: name,
+		Fragment: protocol.LinkName(name, c.User),
 	}
 	return &config.ClientConfig{Protocol: name, URI: u.String()}, nil
 }

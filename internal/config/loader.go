@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/jiayx/proxy-deploy/pkg/secrets"
 )
+
+var userNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
 
 // Load 从文件路径加载 deploy.yaml 并填充默认值
 func Load(path string) (*DeployConfig, error) {
@@ -68,6 +71,23 @@ func (c *DeployConfig) Validate() error {
 		}
 	}
 
+	if len(c.Users) == 0 {
+		return fmt.Errorf("users: at least one user is required (proxyd init-config generates one)")
+	}
+	names, secrets := map[string]bool{}, map[string]bool{}
+	for i, u := range c.Users {
+		if !userNamePattern.MatchString(u.Name) {
+			return fmt.Errorf("users[%d]: name %q must be 1-32 letters, digits, '-' or '_'", i, u.Name)
+		}
+		if len(u.Secret) < 16 {
+			return fmt.Errorf("users[%d] %s: secret must be at least 16 characters", i, u.Name)
+		}
+		if names[u.Name] || secrets[u.Secret] {
+			return fmt.Errorf("users[%d] %s: duplicate name or secret", i, u.Name)
+		}
+		names[u.Name], secrets[u.Secret] = true, true
+	}
+
 	seen := map[string]bool{}
 	for i, p := range c.Protocols {
 		if p.Name == "" {
@@ -98,8 +118,7 @@ func (c *DeployConfig) Validate() error {
 // Example 返回一个带注释的示例配置，协议凭据随机生成
 func Example() string {
 	privateKey, _ := secrets.RealityKeyPair()
-	return fmt.Sprintf(exampleTemplate, secrets.Password(), secrets.Password(), secrets.UUID(), privateKey, secrets.ShortID(),
-		secrets.UUID(), secrets.Password(), secrets.Key(16))
+	return fmt.Sprintf(exampleTemplate, secrets.Password(), privateKey, secrets.ShortID(), secrets.Key(16))
 }
 
 const exampleTemplate = `# proxy-deploy 配置示例
@@ -116,40 +135,38 @@ entry:
   https_port: 443           # TCP 入口，Caddy l4 按 SNI 分流
   http_port: 80             # HTTP 跳转与 ACME HTTP-01 验证
 
+# 用户：各协议的密码、UUID、密钥都由 secret 推导，客户端链接按用户输出（proxyd client-config <用户>）
+users:
+  - name: default
+    secret: "%s"          # 更换即作废该用户的全部旧凭据
+
 protocols:
   - name: hysteria2         # UDP/QUIC，默认使用 UDP/<https_port>
     enabled: true
     # sni: hysteria2.example.com   # 默认 <name>.<domain>，需要解析到本机
-    config:
-      password: "%s"
 
   - name: anytls            # TCP，与网站共享 TCP/<https_port>，按 SNI 分流
     enabled: true
-    config:
-      password: "%s"
 
   - name: vless-reality     # TCP，与网站共享 TCP/<https_port>；网关按 SNI 原样透传，Reality 自己握手
     enabled: false
     # sni: www.microsoft.com       # 伪装目标网站，默认 www.microsoft.com；建议换成离服务器近、支持 TLS 1.3 的网站
     config:
-      uuid: "%s"
       private_key: "%s"     # 公钥由它推导，客户端链接里会给出
       short_id: "%s"
       # handshake: www.microsoft.com:443   # 伪装握手的目标，默认是 sni 的 443 端口
 
   - name: tuic              # UDP/QUIC，与 hysteria2 共享 UDP/<https_port>，网关按 QUIC SNI 分流
     enabled: false
-    config:
-      uuid: "%s"
-      password: "%s"
-      # congestion_control: bbr        # bbr | cubic | new_reno
+    # config:
+    #   congestion_control: bbr        # bbr | cubic | new_reno
 
-  - name: ss2022            # Shadowsocks 2022，没有 TLS，直接监听单独的端口（TCP 和 UDP）
+  - name: ss2022            # Shadowsocks 2022，没有 TLS，独占单独的端口（TCP 和 UDP，网关不识别直接转发）
     enabled: false
     port: 8388              # 必填，不能与入口端口相同；需在防火墙放行 TCP 和 UDP
     config:
-      # method: 2022-blake3-aes-128-gcm   # 或 2022-blake3-aes-256-gcm / 2022-blake3-chacha20-poly1305（密钥 32 字节）
-      password: "%s"
+      # method: 2022-blake3-aes-128-gcm   # 或 2022-blake3-aes-256-gcm（密钥 32 字节）
+      password: "%s"        # 服务端密钥；每个用户另有由 secret 推导的密钥
 
 web:
   - name: site

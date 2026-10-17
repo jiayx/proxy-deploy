@@ -2,6 +2,10 @@ package protocol
 
 import (
 	"context"
+	"crypto/hkdf"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"sort"
 
@@ -40,6 +44,41 @@ type Runtime struct {
 	SNI        string              // 客户端使用的 SNI
 	Cert       *config.Certificate // 统一管理的证书；仅 CertConsumer 会拿到
 	SiteURL    string              // 内部网站的明文 HTTP 地址（回环），可用于伪装或回落
+	Users      []User              // 全部用户，服务端配置为每个用户生成凭据
+}
+
+// User 是一个用户。各协议的凭据都由 Secret 推导（推导时带上协议名，互不相同），
+// 所以新增协议时每个用户自动拥有凭据，更换 Secret 即作废该用户的全部旧凭据
+type User struct {
+	Name   string
+	Secret string
+}
+
+// Password 返回用户在某协议下的密码（24 个 base64url 字符）
+func (u User) Password(protocol string) string {
+	return base64.RawURLEncoding.EncodeToString(u.derive(protocol+"/password", 18))
+}
+
+// UUID 返回用户在某协议下的 UUID（v4 格式）
+func (u User) UUID(protocol string) string {
+	b := u.derive(protocol+"/uuid", 16)
+	b[6] = b[6]&0x0f | 0x40
+	b[8] = b[8]&0x3f | 0x80
+	h := hex.EncodeToString(b)
+	return h[:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:]
+}
+
+// Key 返回用户在某协议下 n 字节密钥的标准 base64 编码
+func (u User) Key(protocol string, n int) string {
+	return base64.StdEncoding.EncodeToString(u.derive(fmt.Sprintf("%s/key%d", protocol, n), n))
+}
+
+func (u User) derive(info string, n int) []byte {
+	key, err := hkdf.Key(sha256.New, []byte(u.Secret), nil, "proxy-deploy/"+info, n)
+	if err != nil {
+		panic(err) // 只会在长度超限时发生，这里的长度都很小
+	}
+	return key
 }
 
 // Service 描述一个服务端进程
@@ -92,6 +131,7 @@ type CertConsumer interface {
 
 // ClientContext 是客户端连接所需的入口信息，由编排器根据端口规划提供
 type ClientContext struct {
+	User     User
 	Host     string // 客户端连接的服务器地址
 	Port     int    // 公网端口
 	SNI      string
@@ -119,16 +159,8 @@ func (t Transport) String() string {
 	return "unknown"
 }
 
-// RequirePassword 校验 config.password 已填写，且不是示例里的占位值
-func RequirePassword(cfg *config.ProtocolConfig) error {
-	switch StringOption(cfg, "password") {
-	case "":
-		return fmt.Errorf("config.password is required")
-	case "change-me":
-		return fmt.Errorf("config.password 仍是占位值 change-me")
-	}
-	return nil
-}
+// LinkName 返回客户端链接的显示名，例如 anytls-alice
+func LinkName(protocol string, u User) string { return protocol + "-" + u.Name }
 
 // StringOption 读取协议配置中的字符串选项
 func StringOption(cfg *config.ProtocolConfig, key string) string {
