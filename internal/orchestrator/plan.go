@@ -309,6 +309,7 @@ func (o *Orchestrator) Plan() *Plan {
 		AdminSocket:   o.layout.CaddyAdminSocket(),
 		StorageRoot:   o.layout.CaddyDataDir(),
 		UsageFile:     filepath.Join(o.layout.VarDir(), "usage.json"),
+		Users:         userPolicies(c),
 		Issuer:        issuer,
 		CertNames:     certNames,
 		DefaultSNI:    c.Domain,
@@ -397,6 +398,15 @@ func (o *Orchestrator) clientConfig(s *Service, u protocol.User, insecure bool) 
 		cc.Notes = append(cc.Notes, "证书由内部 CA 签发，客户端需要跳过证书校验")
 	}
 	return cc, nil
+}
+
+// userPolicies 把配置中的用户上限和到期设置转换为网关配置
+func userPolicies(c *config.DeployConfig) []caddy.UserPolicy {
+	out := make([]caddy.UserPolicy, 0, len(c.Users))
+	for _, u := range c.Users {
+		out = append(out, caddy.UserPolicy{Name: u.Name, TrafficLimit: u.LimitBytes(), ResetDay: u.ResetDay, Expire: u.ExpireAt()})
+	}
+	return out
 }
 
 // users 把配置中的用户转换为适配器使用的形式

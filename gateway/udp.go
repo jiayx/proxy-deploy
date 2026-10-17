@@ -394,7 +394,13 @@ func (t *udpTable) connect(sess *udpSession, route *Route) {
 	enableGRO(sess.upstream)
 	sess.route = route
 	sess.log = sess.log.With(zap.String("route", route.Name))
-	sess.rec, sess.recKey = trackConn(route.Name, "udp", sess.upstream.LocalAddr(), &sess.up, &sess.down)
+	sess.rec, sess.recKey = trackConn(route.Name, "udp", sess.upstream.LocalAddr(), &sess.up, &sess.down, func() {
+		// 先从会话表移除，客户端之后的数据报才能建立新会话（随后同样会被识别并断开）
+		t.mu.Lock()
+		t.forget(sess)
+		t.mu.Unlock()
+		sess.close("user blocked")
+	})
 	route.stats.Active.Add(1)
 	route.stats.Total.Add(1)
 	for _, d := range sess.pending {

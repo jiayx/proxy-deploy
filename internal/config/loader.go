@@ -7,13 +7,34 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"strconv"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/jiayx/proxy-deploy/pkg/secrets"
 )
 
-var userNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
+var (
+	userNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
+	sizePattern     = regexp.MustCompile(`^([0-9]+(?:\.[0-9]+)?)\s*([KMGT]i?B|B)?$`)
+	sizeUnits       = map[string]float64{"": 1, "B": 1,
+		"KB": 1e3, "MB": 1e6, "GB": 1e9, "TB": 1e12,
+		"KiB": 1 << 10, "MiB": 1 << 20, "GiB": 1 << 30, "TiB": 1 << 40}
+)
+
+// ParseSize 解析流量大小，如 500GB（十进制）、200GiB（二进制）；空字符串为 0
+func ParseSize(s string) (int64, error) {
+	if s == "" {
+		return 0, nil
+	}
+	m := sizePattern.FindStringSubmatch(s)
+	if m == nil {
+		return 0, fmt.Errorf("%q is not a size like 200GiB or 500GB", s)
+	}
+	n, _ := strconv.ParseFloat(m[1], 64)
+	return int64(n * sizeUnits[m[2]]), nil
+}
 
 // Load 从文件路径加载 deploy.yaml 并填充默认值
 func Load(path string) (*DeployConfig, error) {
@@ -85,6 +106,17 @@ func (c *DeployConfig) Validate() error {
 		if names[u.Name] || secrets[u.Secret] {
 			return fmt.Errorf("users[%d] %s: duplicate name or secret", i, u.Name)
 		}
+		if _, err := ParseSize(u.TrafficLimit); err != nil {
+			return fmt.Errorf("users[%d] %s: traffic_limit: %w", i, u.Name, err)
+		}
+		if u.ResetDay < 0 || u.ResetDay > 28 {
+			return fmt.Errorf("users[%d] %s: reset_day must be between 1 and 28", i, u.Name)
+		}
+		if u.Expire != "" {
+			if _, err := time.Parse(time.DateOnly, u.Expire); err != nil {
+				return fmt.Errorf("users[%d] %s: expire must be a date like 2027-01-31", i, u.Name)
+			}
+		}
 		names[u.Name], secrets[u.Secret] = true, true
 	}
 
@@ -139,6 +171,9 @@ entry:
 users:
   - name: default
     secret: "%s"          # 更换即作废该用户的全部旧凭据
+    # traffic_limit: 200GiB    # 每个周期的流量上限（上下行合计），不填不限
+    # reset_day: 1             # 每月几号重置流量（1-28），默认 1
+    # expire: 2027-01-31       # 到期日，当天结束前可用，不填不过期
 
 protocols:
   - name: hysteria2         # UDP/QUIC，默认使用 UDP/<https_port>

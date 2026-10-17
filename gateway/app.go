@@ -28,6 +28,8 @@ type App struct {
 	Backends map[string]*Backend `json:"backends,omitempty"`
 	// UsageFile 保存按用户累计的流量，Caddy 重启后接着累计；为空时不持久化
 	UsageFile string `json:"usage_file,omitempty"`
+	// Users 是各用户的流量上限和到期设置；超额或到期用户的连接会被断开
+	Users map[string]*UserPolicy `json:"users,omitempty"`
 
 	// TLSConnectionPolicies 用于终结 TLS 的路由；为空时使用默认策略（按 SNI 取 Caddy 管理的证书）
 	TLSConnectionPolicies caddytls.ConnectionPolicies `json:"tls_connection_policies,omitempty"`
@@ -97,6 +99,15 @@ func (a *App) Provision(ctx caddy.Context) error {
 			return fmt.Errorf("backend %s: command is required", name)
 		}
 	}
+	for name, p := range a.Users {
+		if p.Expire != "" {
+			t, err := time.Parse(time.RFC3339, p.Expire)
+			if err != nil {
+				return fmt.Errorf("user %s: expire: %w", name, err)
+			}
+			p.expireAt = t
+		}
+	}
 
 	needTLS := false
 	for name, srv := range a.Servers {
@@ -162,6 +173,11 @@ func (a *App) Provision(ctx caddy.Context) error {
 
 func (a *App) Start() error {
 	setUsageFile(a.UsageFile, a.logger)
+	setPolicies(a.Users)
+	for name := range a.Users {
+		statsForUser(name) // 还没有流量的用户也出现在统计里
+	}
+	accountingLogger.Store(a.logger)
 	// 先启动后端，监听开始后转发过来的连接才有去处
 	names := make([]string, 0, len(a.Backends))
 	for name := range a.Backends {

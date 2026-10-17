@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Issuer 描述证书签发方式
@@ -82,6 +83,14 @@ type RawServer struct {
 	Upstream string
 }
 
+// UserPolicy 是一个用户的流量上限和到期设置
+type UserPolicy struct {
+	Name         string
+	TrafficLimit int64     // 每个周期的上限（字节），0 表示不限
+	ResetDay     int       // 每月重置日，0 表示默认（1 号）
+	Expire       time.Time // 到期时刻，零值表示不过期
+}
+
 // Backend 是由网关启动并监管的协议后端进程
 type Backend struct {
 	Name         string
@@ -117,6 +126,7 @@ type Spec struct {
 	UDPServers []UDPServer
 	RawServers []RawServer
 	Backends   []Backend
+	Users      []UserPolicy
 	Sites      []Site
 }
 
@@ -220,6 +230,23 @@ func gatewayApp(s Spec) obj {
 	app := obj{"servers": servers}
 	if s.UsageFile != "" {
 		app["usage_file"] = s.UsageFile
+	}
+	if len(s.Users) > 0 {
+		users := obj{}
+		for _, u := range s.Users {
+			policy := obj{}
+			if u.TrafficLimit > 0 {
+				policy["traffic_limit"] = u.TrafficLimit
+			}
+			if u.ResetDay > 0 {
+				policy["reset_day"] = u.ResetDay
+			}
+			if !u.Expire.IsZero() {
+				policy["expire"] = u.Expire.Format(time.RFC3339)
+			}
+			users[u.Name] = policy
+		}
+		app["users"] = users
 	}
 	if len(s.Backends) > 0 {
 		backends := obj{}

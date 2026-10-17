@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func writeConfig(t *testing.T, content string) string {
@@ -71,5 +72,30 @@ certificates: {provider: internal}
 				t.Fatalf("want error containing %q, got %v", c.want, err)
 			}
 		})
+	}
+}
+
+func TestParseSize(t *testing.T) {
+	for in, want := range map[string]int64{
+		"": 0, "1024": 1024, "500GB": 500e9, "200GiB": 200 << 30, "1.5TiB": 3 << 39, "10 MiB": 10 << 20, "1KB": 1000,
+	} {
+		if got, err := ParseSize(in); err != nil || got != want {
+			t.Errorf("%q: got %d, %v; want %d", in, got, err, want)
+		}
+	}
+	for _, bad := range []string{"lots", "10XB", "-1GB", "GB"} {
+		if _, err := ParseSize(bad); err == nil {
+			t.Errorf("%q should be rejected", bad)
+		}
+	}
+}
+
+func TestUserExpireAt(t *testing.T) {
+	u := UserConfig{Expire: "2027-01-31"}
+	if got := u.ExpireAt(); !got.Equal(time.Date(2027, 2, 1, 0, 0, 0, 0, time.Local)) {
+		t.Fatalf("expire date should last until the end of that day, got %s", got)
+	}
+	if !(UserConfig{}).ExpireAt().IsZero() {
+		t.Fatal("no expire means never")
 	}
 }

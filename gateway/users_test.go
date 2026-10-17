@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 )
@@ -23,9 +24,9 @@ func userTotals(name string) (active, total, up, down int64) {
 
 func TestLogAccounting(t *testing.T) {
 	var tcpUp, tcpDown, udpUp, udpDown, anonUp, anonDown atomic.Int64
-	tcpRec, tcpKey := trackConn("acct-test", "tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 41001}, &tcpUp, &tcpDown)
-	udpRec, udpKey := trackConn("acct-test", "udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 41001}, &udpUp, &udpDown)
-	anonRec, anonKey := trackConn("acct-test", "tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 41002}, &anonUp, &anonDown)
+	tcpRec, tcpKey := trackConn("acct-test", "tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 41001}, &tcpUp, &tcpDown, nil)
+	udpRec, udpKey := trackConn("acct-test", "udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 41001}, &udpUp, &udpDown, nil)
+	anonRec, anonKey := trackConn("acct-test", "tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 41002}, &anonUp, &anonDown, nil)
 
 	alice, bob := uniqueUser("alice"), uniqueUser("bob")
 	a := logAccounting{backend: "acct-test", ports: map[string]int{}}
@@ -116,5 +117,79 @@ func TestUsagePersistence(t *testing.T) {
 	setUsageFile(path, zap.NewNop())
 	if _, total, up, down := userTotals(dave); total != 3 || up != 123 || down != 456 {
 		t.Fatalf("restored total=%d up=%d down=%d", total, up, down)
+	}
+}
+
+func TestCurrentPeriodStart(t *testing.T) {
+	loc := time.UTC
+	cases := []struct {
+		now      time.Time
+		resetDay int
+		want     time.Time
+	}{
+		{time.Date(2026, 10, 18, 12, 0, 0, 0, loc), 1, time.Date(2026, 10, 1, 0, 0, 0, 0, loc)},
+		{time.Date(2026, 10, 18, 12, 0, 0, 0, loc), 20, time.Date(2026, 9, 20, 0, 0, 0, 0, loc)},
+		{time.Date(2026, 1, 5, 0, 0, 0, 0, loc), 10, time.Date(2025, 12, 10, 0, 0, 0, 0, loc)},
+		{time.Date(2026, 3, 15, 0, 0, 0, 0, loc), 15, time.Date(2026, 3, 15, 0, 0, 0, 0, loc)},
+		{time.Date(2026, 3, 15, 0, 0, 0, 0, loc), 0, time.Date(2026, 3, 1, 0, 0, 0, 0, loc)}, // 默认 1 号
+	}
+	for _, c := range cases {
+		if got := currentPeriodStart(c.now, c.resetDay); !got.Equal(c.want) {
+			t.Errorf("now=%s reset=%d: got %s, want %s", c.now, c.resetDay, got, c.want)
+		}
+	}
+}
+
+func TestUserStateAndPeriodReset(t *testing.T) {
+	name := uniqueUser("eve")
+	setPolicies(map[string]*UserPolicy{name: {TrafficLimit: 1000, ResetDay: 1}})
+	defer setPolicies(nil)
+	u := statsForUser(name)
+
+	now := time.Date(2026, 10, 18, 12, 0, 0, 0, time.Local)
+	if s := u.checkState(now); s != UserActive {
+		t.Fatalf("new user: %s", s)
+	}
+	u.PeriodDown.Store(1000)
+	u.BytesDown.Store(1000)
+	if s := u.checkState(now); s != UserOverLimit {
+		t.Fatalf("at limit: %s", s)
+	}
+	if s := u.checkState(now.AddDate(0, 1, 0)); s != UserActive || u.PeriodDown.Load() != 0 || u.BytesDown.Load() != 1000 {
+		t.Fatalf("next period should reset period usage only: state=%s period=%d total=%d", s, u.PeriodDown.Load(), u.BytesDown.Load())
+	}
+
+	p := policyFor(name)
+	p.expireAt = now.Add(-time.Hour)
+	if s := u.checkState(now.AddDate(0, 1, 0)); s != UserExpired {
+		t.Fatalf("expired user: %s", s)
+	}
+}
+
+func TestEnforcementDisconnects(t *testing.T) {
+	name := uniqueUser("frank")
+	setPolicies(map[string]*UserPolicy{name: {TrafficLimit: 100}})
+	defer setPolicies(nil)
+
+	closed := make(chan string, 2)
+	var up1, down1, up2, down2 atomic.Int64
+	rec1, key1 := trackConn("enf", "tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 42001}, &up1, &down1, func() { closed <- "first" })
+	defer untrackConn(rec1, key1)
+	attributeUser("enf", false, 42001, name)
+
+	// 用量超过上限后，已有连接在下一次执法时被断开
+	down1.Add(150)
+	flushAccounting()
+	enforcePolicies(zap.NewNop())
+	if got := <-closed; got != "first" {
+		t.Fatalf("expected the active connection to be closed, got %s", got)
+	}
+
+	// 已超额用户的新连接在识别出用户时立即断开
+	rec2, key2 := trackConn("enf", "tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 42002}, &up2, &down2, func() { closed <- "second" })
+	defer untrackConn(rec2, key2)
+	attributeUser("enf", false, 42002, name)
+	if got := <-closed; got != "second" {
+		t.Fatalf("expected the new connection to be closed, got %s", got)
 	}
 }

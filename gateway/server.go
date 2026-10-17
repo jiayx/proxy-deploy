@@ -99,7 +99,10 @@ func (s *Server) handle(conn net.Conn) {
 	st.Active.Add(1)
 	st.Total.Add(1)
 	var up, down atomic.Int64
-	rec, key := trackConn(route.Name, "tcp", upstream.LocalAddr(), &up, &down)
+	rec, key := trackConn(route.Name, "tcp", upstream.LocalAddr(), &up, &down, func() {
+		client.Close()
+		upstream.Close()
+	})
 	relay(client, upstream, []*atomic.Int64{&up, &st.BytesUp}, []*atomic.Int64{&down, &st.BytesDown})
 	untrackConn(rec, key)
 	st.Active.Add(-1)

@@ -119,12 +119,9 @@ func run(ctx context.Context, cmd string, rest []string, layout *paths.Layout,
 		fmt.Println("用户:")
 		if list, err := orch.UserStats(ctx); err != nil {
 			fmt.Printf("  ✗ 读取统计失败：%v\n", err)
-		} else if len(list) == 0 {
-			fmt.Println("  （还没有用户产生流量）")
 		} else {
 			for _, u := range list {
-				fmt.Printf("  %-14s 活动 %-4d 累计 %-8d ↑ %-10s ↓ %-10s 合计 %s\n", u.User, u.Active, u.Total,
-					humanBytes(u.BytesUp), humanBytes(u.BytesDown), humanBytes(u.BytesUp+u.BytesDown))
+				printUser(u)
 			}
 		}
 		fmt.Println("网关:")
@@ -196,6 +193,29 @@ func run(ctx context.Context, cmd string, rest []string, layout *paths.Layout,
 		return printClients(orch, plan, user)
 	}
 	return fmt.Errorf("未知命令 %q", cmd)
+}
+
+var userStates = map[string]string{"active": "正常", "over_limit": "已超额", "expired": "已到期"}
+
+func printUser(u orchestrator.UserStats) {
+	mark := "✓"
+	if u.State != "active" {
+		mark = "✗"
+	}
+	usage := humanBytes(u.PeriodUp + u.PeriodDown)
+	if u.TrafficLimit > 0 {
+		usage += " / " + humanBytes(u.TrafficLimit)
+	}
+	since := ""
+	if t, err := time.Parse(time.RFC3339, u.PeriodStart); err == nil {
+		since = "（" + t.Format("01-02") + " 起）"
+	}
+	expire := ""
+	if t, err := time.Parse(time.RFC3339, u.Expire); err == nil {
+		expire = "，" + t.Add(-time.Second).Format("2006-01-02") + " 到期"
+	}
+	fmt.Printf("  %s %-12s %-6s 本周期 %s%s，活动连接 %d%s\n", mark, u.User, userStates[u.State], usage, since, u.Active, expire)
+	fmt.Printf("    累计 ↑ %s ↓ %s，%d 个连接\n", humanBytes(u.BytesUp), humanBytes(u.BytesDown), u.Total)
 }
 
 func humanBytes(n int64) string {

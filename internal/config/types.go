@@ -1,5 +1,7 @@
 package config
 
+import "time"
+
 // DeployConfig 是整个部署的配置（deploy.yaml）
 type DeployConfig struct {
 	Domain       string            `yaml:"domain"`
@@ -36,6 +38,27 @@ type EntryConfig struct {
 type UserConfig struct {
 	Name   string `yaml:"name"`
 	Secret string `yaml:"secret"`
+	// TrafficLimit 是每个周期的流量上限（上下行合计），如 200GiB、500GB；为空表示不限
+	TrafficLimit string `yaml:"traffic_limit,omitempty"`
+	// ResetDay 是每月重置流量的日期（1-28），默认 1
+	ResetDay int `yaml:"reset_day,omitempty"`
+	// Expire 是到期日（YYYY-MM-DD），当天结束前可用；为空表示不过期
+	Expire string `yaml:"expire,omitempty"`
+}
+
+// LimitBytes 返回流量上限的字节数，0 表示不限；配置已通过校验
+func (u UserConfig) LimitBytes() int64 {
+	n, _ := ParseSize(u.TrafficLimit)
+	return n
+}
+
+// ExpireAt 返回到期时刻（到期日次日零点，服务器本地时间），零值表示不过期
+func (u UserConfig) ExpireAt() time.Time {
+	if u.Expire == "" {
+		return time.Time{}
+	}
+	d, _ := time.ParseInLocation(time.DateOnly, u.Expire, time.Local)
+	return d.AddDate(0, 0, 1)
 }
 
 // ProtocolConfig 协议配置
