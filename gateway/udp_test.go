@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"io"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -58,7 +59,7 @@ func startUDPGateway(t *testing.T, s *Server) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	table := &udpTable{sessions: map[string]*udpSession{}}
+	table := newUDPTable()
 	table.attach(s, pc)
 	go s.serveUDP(pc, table)
 	t.Cleanup(func() { pc.Close(); table.detach(pc) })
@@ -105,5 +106,137 @@ func TestUDPNoRoute(t *testing.T) {
 	}
 	if hy2.stats.Total.Load() != 0 {
 		t.Fatal("unmatched connection must not reach the backend")
+	}
+}
+
+// rebindingRelay 在客户端和网关之间转发数据报，rebind 后改用新的本地端口发往网关，
+// 模拟 NAT 重新映射：客户端毫无感知，网关看到的客户端地址变了
+type rebindingRelay struct {
+	front  net.PacketConn // 面向客户端
+	target *net.UDPAddr
+	client atomic.Pointer[net.UDPAddr]
+	back   atomic.Pointer[net.UDPConn] // 面向网关，rebind 时替换
+}
+
+func newRebindingRelay(t *testing.T, target string) *rebindingRelay {
+	t.Helper()
+	front, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &rebindingRelay{front: front}
+	r.target, _ = net.ResolveUDPAddr("udp", target)
+	t.Cleanup(func() { front.Close(); r.back.Load().Close() })
+	r.rebind(t)
+	go func() {
+		buf := make([]byte, 65535)
+		for {
+			n, addr, err := front.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			r.client.Store(addr.(*net.UDPAddr))
+			r.back.Load().WriteTo(buf[:n], r.target)
+		}
+	}()
+	return r
+}
+
+func (r *rebindingRelay) rebind(t *testing.T) {
+	back, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if old := r.back.Swap(back); old != nil {
+		go func() { time.Sleep(time.Second); old.Close() }() // 旧端口上迟到的回包仍转回客户端
+	}
+	go func() {
+		buf := make([]byte, 65535)
+		for {
+			n, err := back.Read(buf)
+			if err != nil {
+				return
+			}
+			if c := r.client.Load(); c != nil {
+				r.front.WriteTo(buf[:n], c)
+			}
+		}
+	}()
+}
+
+func echo(t *testing.T, str *quic.Stream, msg string) {
+	t.Helper()
+	str.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := str.Write([]byte(msg)); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, len(msg))
+	if _, err := io.ReadFull(str, buf); err != nil || string(buf) != msg {
+		t.Fatalf("echo %q failed: %q %v", msg, buf, err)
+	}
+}
+
+func TestUDPClientAddressChange(t *testing.T) {
+	hy2 := &Route{Name: "hysteria2", SNI: []string{"hy2.example.com"}, TLS: TLSPassthrough, Upstream: quicEchoServer(t, "hy2.example.com")}
+	gw := startUDPGateway(t, &Server{Routes: []*Route{hy2}})
+	relay := newRebindingRelay(t, gw)
+
+	conn, err := dialQUIC(relay.front.LocalAddr().String(), "hy2.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.CloseWithError(0, "")
+	str, _ := conn.OpenStreamSync(context.Background())
+	echo(t, str, "before")
+
+	time.Sleep(migrateQuiet + 200*time.Millisecond) // 原地址静默，模拟切换网络的间隙
+	relay.rebind(t)
+	echo(t, str, "after")
+
+	if got := hy2.stats.Total.Load(); got != 1 {
+		t.Fatalf("address change should keep the same session, got %d sessions", got)
+	}
+}
+
+func TestUDPMigrationRequiresQuietOldAddress(t *testing.T) {
+	table := newUDPTable()
+	upstream, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	defer upstream.Close()
+	sess := &udpSession{key: "1.1.1.1:1000", route: &Route{stats: new(routeStats)}, log: zap.NewNop()}
+	sess.upstream, _ = net.DialUDP("udp", nil, upstream.LocalAddr().(*net.UDPAddr))
+	defer sess.upstream.Close()
+	old := &net.UDPAddr{IP: net.IPv4(1, 1, 1, 1), Port: 1000}
+	sess.client.Store(old)
+	sess.established.Store(true)
+	table.sessions[sess.key] = sess
+	table.addCID(sess, "\x01\x02\x03\x04")
+
+	shortHeader := []byte{0x40, 1, 2, 3, 4, 0xaa, 0xbb}
+	spoofed := &net.UDPAddr{IP: net.IPv4(6, 6, 6, 6), Port: 6666}
+
+	sess.lastFromClient.Store(time.Now().UnixNano()) // 原地址刚刚还在通信
+	table.handle(spoofed, shortHeader)
+	if sess.client.Load() != old || table.sessions["6.6.6.6:6666"] != nil {
+		t.Fatal("must not move an active session to a new address")
+	}
+
+	sess.lastFromClient.Store(time.Now().Add(-2 * migrateQuiet).UnixNano()) // 原地址已静默
+	table.handle(spoofed, shortHeader)
+	if sess.client.Load().String() != "6.6.6.6:6666" || table.sessions["6.6.6.6:6666"] != sess || table.sessions["1.1.1.1:1000"] != nil {
+		t.Fatal("session should follow the client to its new address")
+	}
+}
+
+func TestUDPConnectionIDsKeepMostRecent(t *testing.T) {
+	table := newUDPTable()
+	sess := &udpSession{}
+	for i := 0; i < maxSessionCIDs+2; i++ {
+		table.addCID(sess, string(rune('a'+i)))
+	}
+	if len(sess.cids) != maxSessionCIDs || len(table.cids) != maxSessionCIDs {
+		t.Fatalf("want %d connection IDs, got session=%d table=%d", maxSessionCIDs, len(sess.cids), len(table.cids))
+	}
+	if table.cids["a"] != nil || table.cids["b"] != nil || table.cids[string(rune('a'+maxSessionCIDs+1))] != sess {
+		t.Fatal("oldest connection IDs should be evicted first")
 	}
 }

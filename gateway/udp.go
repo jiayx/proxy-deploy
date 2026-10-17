@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"errors"
 	"net"
 	"sync"
@@ -16,34 +17,50 @@ import (
 // Caddy 重载配置时会用 SO_REUSEPORT 再绑定一个同端口的新 socket，内核按四元组把数据报
 // 分给新旧 socket 之一。所以会话表按监听地址放在进程级，新旧应用实例共用，
 // 回包总是经由当前最新的 socket 发出，重载不会中断已建立的 QUIC 连接。
+//
+// 连接迁移：QUIC 按连接 ID 而不是地址识别连接。网关学习每个会话的服务端连接 ID：
+// 握手期间从后端回包长包头的源连接 ID 得到长度和第一个 ID；客户端握手后通常会改用
+// 服务端在加密帧中下发的新 ID，所以也从客户端短包头中学习它当前使用的 ID。
+// 客户端地址变化后（NAT 重新映射、切换网络但沿用原 socket），新地址发来的数据报
+// 仍带着这些 ID，网关据此找回原会话。后端看到的仍是网关的同一个 socket，不感知迁移。
+// 客户端主动迁移并换用从未用过的 ID 时无法识别，需要重新连接。
 
 const (
 	maxPendingDatagrams = 16 // 选定路由前最多缓存的数据报数
 	udpBufferSize       = 65535
+	maxSessionCIDs      = 8 // 每个会话保留最近学到的连接 ID 数
+
+	// migrateQuiet：只有原地址静默超过这段时间，才把回包切到新地址。真正切换网络时
+	// 原地址不会再有数据；能看到连接 ID 的中间人伪造来源地址也无法在正常通信时劫持回包
+	migrateQuiet = time.Second
 )
 
 // udpTable 是一个 UDP 监听地址上的会话表
 type udpTable struct {
 	mu       sync.Mutex
-	sessions map[string]*udpSession
-	writer   net.PacketConn // 当前监听 socket（Caddy 的包装），用于判断归属
-	udp      *net.UDPConn   // writer 底层的 UDP socket，回包经由它发出（支持 GSO）
-	server   *Server        // 当前生效的配置，决定超时和新会话的路由
+	sessions map[string]*udpSession // 客户端地址 → 会话
+	cids     map[string]*udpSession // 服务端连接 ID → 会话
+	cidLens  map[int]bool           // 学到的连接 ID 长度；短包头不含长度，按这些长度尝试查找
+	writer   net.PacketConn         // 当前监听 socket（Caddy 的包装），用于判断归属
+	udp      *net.UDPConn           // writer 底层的 UDP socket，回包经由它发出（支持 GSO）
+	server   *Server                // 当前生效的配置，决定超时和新会话的路由
 
 	janitor sync.Once
 }
 
 var udpTables sync.Map // 监听地址 → *udpTable
 
+func newUDPTable() *udpTable {
+	return &udpTable{sessions: map[string]*udpSession{}, cids: map[string]*udpSession{}, cidLens: map[int]bool{}}
+}
+
 func tableFor(key string) *udpTable {
-	t, _ := udpTables.LoadOrStore(key, &udpTable{sessions: map[string]*udpSession{}})
+	t, _ := udpTables.LoadOrStore(key, newUDPTable())
 	return t.(*udpTable)
 }
 
 type udpSession struct {
 	mu       sync.Mutex
-	client   *net.UDPAddr
-	key      string
 	start    time.Time
 	pending  [][]byte
 	asm      cryptoAssembler
@@ -53,9 +70,17 @@ type udpSession struct {
 	closed   bool
 	log      *zap.Logger
 
-	lastActive  atomic.Int64 // UnixNano
-	established atomic.Bool  // 已选定路由并连接后端；reap 读取它而不拿 mu，避免与 handle 的加锁顺序相反
-	up, down    atomic.Int64
+	key     string   // 当前客户端地址，在 table.sessions 中的键；由 table.mu 保护
+	cids    []string // 最近学到的连接 ID，最早的在前；由 table.mu 保护
+	lastCID []byte   // 客户端最近使用的连接 ID，变化时才登记；由 mu 保护
+
+	cidLen atomic.Int32 // 服务端连接 ID 长度，握手时从源连接 ID 学到
+
+	client         atomic.Pointer[net.UDPAddr] // 回包地址，迁移时更新
+	lastActive     atomic.Int64                // UnixNano，任一方向有数据
+	lastFromClient atomic.Int64                // UnixNano，当前客户端地址最后一次发来数据
+	established    atomic.Bool                 // 已选定路由并连接后端；reap 读取它而不拿 mu，避免与 handle 的加锁顺序相反
+	up, down       atomic.Int64
 }
 
 func (s *udpSession) touch() { s.lastActive.Store(time.Now().UnixNano()) }
@@ -82,7 +107,7 @@ func (t *udpTable) detach(pc net.PacketConn) {
 	}
 	t.writer, t.server, t.udp = nil, nil, nil
 	sessions := t.sessions
-	t.sessions = map[string]*udpSession{}
+	t.sessions, t.cids = map[string]*udpSession{}, map[string]*udpSession{}
 	t.mu.Unlock()
 	for _, sess := range sessions {
 		sess.close("shutdown")
@@ -136,19 +161,150 @@ func (t *udpTable) handle(addr net.Addr, data []byte) {
 	key := addr.String()
 	t.mu.Lock()
 	sess := t.sessions[key]
-	srv := t.server
-	if sess == nil {
-		if srv == nil || !isQUICInitial(data) {
-			t.mu.Unlock()
-			return // 没有会话的非 Initial 数据报（例如重载前的旧连接迁移过来）无法路由
-		}
-		sess = &udpSession{client: client, key: key, start: time.Now(),
-			log: srv.logger.With(zap.String("remote", key), zap.String("network", "udp"))}
-		t.sessions[key] = sess
+	if sess != nil {
+		t.mu.Unlock()
+		sess.lastFromClient.Store(time.Now().UnixNano())
+		t.forward(sess, data)
+		return
 	}
+	if migrated := t.byCID(data); migrated != nil {
+		t.migrate(migrated, client, key) // 释放 t.mu
+		t.forward(migrated, data)
+		return
+	}
+	srv := t.server
+	if srv == nil || !isQUICInitial(data) {
+		t.mu.Unlock()
+		return // 无法归属到任何会话的数据报
+	}
+	sess = &udpSession{key: key, start: time.Now(),
+		log: srv.logger.With(zap.String("remote", key), zap.String("network", "udp"))}
+	sess.client.Store(client)
+	sess.lastFromClient.Store(time.Now().UnixNano())
+	t.sessions[key] = sess
 	t.mu.Unlock()
-	sess.touch()
+	t.forward(sess, data)
+}
 
+// byCID 按数据报中的目标连接 ID 查找已建立的会话；调用方持有 t.mu
+func (t *udpTable) byCID(data []byte) *udpSession {
+	if len(data) == 0 || data[0]&0x40 == 0 {
+		return nil // 不是 QUIC 数据报（fixed bit 未置位）
+	}
+	if data[0]&0x80 != 0 { // 长包头：目标连接 ID 带长度
+		if len(data) < 6 || int(data[5]) > len(data)-6 {
+			return nil
+		}
+		return t.lookupCID(data[6 : 6+int(data[5])])
+	}
+	for n := range t.cidLens { // 短包头：连接 ID 紧跟第一个字节，长度由服务端决定
+		if len(data) > 1+n {
+			if sess := t.lookupCID(data[1 : 1+n]); sess != nil {
+				return sess
+			}
+		}
+	}
+	return nil
+}
+
+func (t *udpTable) lookupCID(cid []byte) *udpSession {
+	if sess := t.cids[string(cid)]; sess != nil && sess.established.Load() {
+		return sess
+	}
+	return nil
+}
+
+// migrate 处理已知会话从新地址发来的数据报：原地址已静默时把会话切到新地址，
+// 否则只转发、不改回包地址。调用时持有 t.mu，返回前释放
+func (t *udpTable) migrate(sess *udpSession, client *net.UDPAddr, key string) {
+	if time.Since(time.Unix(0, sess.lastFromClient.Load())) < migrateQuiet {
+		t.mu.Unlock()
+		return
+	}
+	old := sess.key
+	if t.sessions[old] == sess {
+		delete(t.sessions, old)
+	}
+	sess.key = key
+	t.sessions[key] = sess
+	sess.client.Store(client)
+	sess.lastFromClient.Store(time.Now().UnixNano())
+	t.mu.Unlock()
+	sess.log.Info("client address changed", zap.String("from", old), zap.String("to", key))
+}
+
+// learnCIDs 从后端回包的长包头中记录服务端连接 ID（源连接 ID 字段）。
+// buf 可能是 GRO 合并的多个数据报，每个 segment 字节一个
+func (t *udpTable) learnCIDs(sess *udpSession, buf []byte, segment int) {
+	if segment <= 0 {
+		segment = len(buf)
+	}
+	for off := 0; off < len(buf); off += segment {
+		b := buf[off:min(off+segment, len(buf))]
+		if len(b) < 7 || b[0]&0xc0 != 0xc0 || (b[1]|b[2]|b[3]|b[4]) == 0 {
+			continue // 只看长包头；版本为 0 的是版本协商包
+		}
+		scidAt := 6 + int(b[5])
+		if scidAt >= len(b) {
+			continue
+		}
+		n := int(b[scidAt])
+		if n == 0 || n > 20 || scidAt+1+n > len(b) {
+			continue
+		}
+		sess.cidLen.Store(int32(n))
+		t.addCID(sess, string(b[scidAt+1:scidAt+1+n]))
+	}
+}
+
+// learnClientCID 从客户端短包头中登记它当前使用的服务端连接 ID；调用方持有 sess.mu
+func (t *udpTable) learnClientCID(sess *udpSession, data []byte) {
+	n := int(sess.cidLen.Load())
+	if n == 0 || len(data) <= 1+n || data[0]&0xc0 != 0x40 {
+		return
+	}
+	cid := data[1 : 1+n]
+	if bytes.Equal(cid, sess.lastCID) {
+		return
+	}
+	sess.lastCID = bytes.Clone(cid)
+	t.addCID(sess, string(cid))
+}
+
+// addCID 登记会话的一个连接 ID，超过上限时淘汰最早的
+func (t *udpTable) addCID(sess *udpSession, cid string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.cids[cid] == sess {
+		return
+	}
+	if len(sess.cids) >= maxSessionCIDs {
+		if t.cids[sess.cids[0]] == sess {
+			delete(t.cids, sess.cids[0])
+		}
+		sess.cids = sess.cids[1:]
+	}
+	t.cids[cid] = sess
+	t.cidLens[len(cid)] = true
+	sess.cids = append(sess.cids, cid)
+}
+
+// forget 从表中移除会话的地址和连接 ID；调用方持有 t.mu
+func (t *udpTable) forget(sess *udpSession) {
+	if t.sessions[sess.key] == sess {
+		delete(t.sessions, sess.key)
+	}
+	for _, cid := range sess.cids {
+		if t.cids[cid] == sess {
+			delete(t.cids, cid)
+		}
+	}
+}
+
+// forward 处理一个客户端数据报：已建立的会话直接转发给后端；
+// 否则缓存并继续重组 ClientHello，完成后选定路由、连接后端
+func (t *udpTable) forward(sess *udpSession, data []byte) {
+	sess.touch()
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
 	if sess.closed {
@@ -157,11 +313,11 @@ func (t *udpTable) handle(addr net.Addr, data []byte) {
 	if sess.upstream != nil {
 		sess.up.Add(int64(len(data)))
 		sess.route.stats.BytesUp.Add(int64(len(data)))
+		t.learnClientCID(sess, data)
 		_, _ = sess.upstream.Write(data)
 		return
 	}
 
-	// 尚未选定路由：缓存数据报并继续重组 ClientHello
 	if len(sess.pending) >= maxPendingDatagrams {
 		sess.log.Debug("ClientHello not found in initial datagrams")
 		t.drop(sess)
@@ -188,6 +344,11 @@ func (t *udpTable) handle(addr net.Addr, data []byte) {
 	hello := parseClientHelloMessage(msg)
 	if hello == nil {
 		sess.log.Debug("invalid ClientHello")
+		t.drop(sess)
+		return
+	}
+	srv, _ := t.current()
+	if srv == nil {
 		t.drop(sess)
 		return
 	}
@@ -237,8 +398,9 @@ func (t *udpTable) pump(sess *udpSession) {
 		sess.touch()
 		sess.down.Add(int64(n))
 		sess.route.stats.BytesDown.Add(int64(n))
+		t.learnCIDs(sess, buf[:n], segment)
 		if _, w := t.current(); w != nil {
-			_ = writeBatch(w, buf[:n], segment, sess.client)
+			_ = writeBatch(w, buf[:n], segment, sess.client.Load())
 		}
 	}
 }
@@ -248,9 +410,7 @@ func (t *udpTable) drop(sess *udpSession) {
 	sess.closed = true
 	sess.pending = nil
 	t.mu.Lock()
-	if t.sessions[sess.key] == sess {
-		delete(t.sessions, sess.key)
-	}
+	t.forget(sess)
 	t.mu.Unlock()
 }
 
@@ -269,6 +429,7 @@ func (sess *udpSession) close(reason string) {
 	sess.route.stats.Active.Add(-1)
 	sess.log.Info("connection closed",
 		zap.String("reason", reason),
+		zap.String("client", sess.client.Load().String()),
 		zap.String("upstream", sess.route.Upstream),
 		zap.String("upstream_local", sess.upstream.LocalAddr().String()),
 		zap.Int64("bytes_up", sess.up.Load()),
@@ -289,14 +450,16 @@ func (t *udpTable) reap() {
 		now := time.Now().UnixNano()
 		var expired []*udpSession
 		t.mu.Lock()
-		for key, sess := range t.sessions {
+		for _, sess := range t.sessions {
 			idle := time.Duration(now - sess.lastActive.Load())
 			established := sess.established.Load()
 			if (established && idle > time.Duration(srv.IdleTimeout)) ||
 				(!established && idle > time.Duration(srv.HandshakeTimeout)) {
-				delete(t.sessions, key)
 				expired = append(expired, sess)
 			}
+		}
+		for _, sess := range expired {
+			t.forget(sess)
 		}
 		t.mu.Unlock()
 		for _, sess := range expired {
