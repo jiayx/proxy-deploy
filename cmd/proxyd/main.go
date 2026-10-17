@@ -16,6 +16,7 @@ import (
 	"github.com/jiayx/proxy-deploy/internal/protocol"
 	"github.com/jiayx/proxy-deploy/internal/protocol/anytls"
 	"github.com/jiayx/proxy-deploy/internal/protocol/hysteria2"
+	"github.com/jiayx/proxy-deploy/internal/protocol/vlessreality"
 	"github.com/jiayx/proxy-deploy/pkg/paths"
 )
 
@@ -123,7 +124,7 @@ func run(ctx context.Context, cmd string, rest []string, layout *paths.Layout,
 			fmt.Printf("  ✗ 读取统计失败：%v\n", err)
 		} else {
 			for _, s := range stats {
-				fmt.Printf("  %-12s 活动 %-4d 累计 %-8d ↑ %-10s ↓ %s\n", s.Route, s.Active, s.Total, humanBytes(s.BytesUp), humanBytes(s.BytesDown))
+				fmt.Printf("  %-14s 活动 %-4d 累计 %-8d ↑ %-10s ↓ %s\n", s.Route, s.Active, s.Total, humanBytes(s.BytesUp), humanBytes(s.BytesDown))
 			}
 		}
 		if layout.User && !orch.Lingering(ctx) {
@@ -156,6 +157,7 @@ func run(ctx context.Context, cmd string, rest []string, layout *paths.Layout,
 	reg := protocol.NewRegistry()
 	reg.Register(hysteria2.New(layout))
 	reg.Register(anytls.New(layout))
+	reg.Register(vlessreality.New(layout))
 	orch := orchestrator.New(reg, cfg, layout)
 	plan := orch.Plan()
 
@@ -218,7 +220,11 @@ func printPlan(p *orchestrator.Plan) {
 		fmt.Printf("  TCP/%-5d 网关", s.Port)
 		var parts []string
 		for _, r := range s.Routes {
-			parts = append(parts, fmt.Sprintf("%s → %s", r.SNI, r.Upstream))
+			mode := ""
+			if r.Passthrough {
+				mode = "（透传）"
+			}
+			parts = append(parts, fmt.Sprintf("%s → %s%s", r.SNI, r.Upstream, mode))
 		}
 		parts = append(parts, "其他 → 网站 "+p.Caddy.SiteAddr)
 		fmt.Printf("  %s\n", strings.Join(parts, "；"))
@@ -237,11 +243,14 @@ func printPlan(p *orchestrator.Plan) {
 
 	fmt.Println("协议:")
 	for _, s := range p.Services {
-		cert := "由入口终结 TLS"
-		if s.Runtime.Cert != nil {
+		cert := "由网关终结 TLS"
+		switch {
+		case s.Runtime.Cert != nil:
 			cert = "读取证书 " + s.Runtime.Cert.Name
+		case s.Passthrough:
+			cert = "自行处理 TLS（网关透传）"
 		}
-		fmt.Printf("  %-10s %s/%d  SNI %-28s 监听 %-16s %s\n",
+		fmt.Printf("  %-14s %s/%d  SNI %-28s 监听 %-16s %s\n",
 			s.Cfg.Name, s.Network, s.PublicPort, s.SNI, s.Runtime.ListenAddr, cert)
 	}
 

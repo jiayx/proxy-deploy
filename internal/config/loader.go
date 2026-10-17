@@ -2,14 +2,14 @@ package config
 
 import (
 	"bytes"
-	"crypto/rand"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/jiayx/proxy-deploy/pkg/secrets"
 )
 
 // Load 从文件路径加载 deploy.yaml 并填充默认值
@@ -95,15 +95,10 @@ func (c *DeployConfig) Validate() error {
 	return nil
 }
 
-// Example 返回一个带注释的示例配置，协议密码随机生成
+// Example 返回一个带注释的示例配置，协议凭据随机生成
 func Example() string {
-	return fmt.Sprintf(exampleTemplate, randomPassword(), randomPassword())
-}
-
-func randomPassword() string {
-	b := make([]byte, 18)
-	_, _ = rand.Read(b)
-	return base64.RawURLEncoding.EncodeToString(b)
+	privateKey, _ := secrets.RealityKeyPair()
+	return fmt.Sprintf(exampleTemplate, secrets.Password(), secrets.Password(), secrets.UUID(), privateKey, secrets.ShortID())
 }
 
 const exampleTemplate = `# proxy-deploy 配置示例
@@ -131,6 +126,15 @@ protocols:
     enabled: true
     config:
       password: "%s"
+
+  - name: vless-reality     # TCP，与网站共享 TCP/<https_port>；网关按 SNI 原样透传，Reality 自己握手
+    enabled: false
+    # sni: www.microsoft.com       # 伪装目标网站，默认 www.microsoft.com；建议换成离服务器近、支持 TLS 1.3 的网站
+    config:
+      uuid: "%s"
+      private_key: "%s"     # 公钥由它推导，客户端链接里会给出
+      short_id: "%s"
+      # handshake: www.microsoft.com:443   # 伪装握手的目标，默认是 sni 的 443 端口
 
 web:
   - name: site

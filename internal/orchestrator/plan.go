@@ -48,13 +48,14 @@ type Port struct {
 
 // Service 是规划后的一个协议服务
 type Service struct {
-	Cfg        *config.ProtocolConfig
-	Adapter    protocol.Adapter
-	SNI        string
-	Network    string // tcp | udp
-	PublicPort int
-	ViaEntry   bool // 流量经过 Caddy 入口转发
-	Runtime    protocol.Runtime
+	Cfg         *config.ProtocolConfig
+	Adapter     protocol.Adapter
+	SNI         string
+	Network     string // tcp | udp
+	PublicPort  int
+	ViaEntry    bool // 流量经过网关转发
+	Passthrough bool // 网关不终结 TLS，原样转发（协议自己处理 TLS）
+	Runtime     protocol.Runtime
 }
 
 // Plan 是一次部署的完整规划，不包含任何副作用
@@ -101,7 +102,12 @@ func (o *Orchestrator) Plan() *Plan {
 	}
 
 	siteAddr, sitePlainAddr := loopback(0), loopback(1)
-	nextLoopback := 2
+	// 协议后端的回环端口按协议名固定（所有已注册协议按名称排序依次分配），
+	// 启用、停用或新增其他协议不会改变已有协议的端口，也就不会让它们重启
+	protocolPort := map[string]int{}
+	for i, name := range o.registry.Names() {
+		protocolPort[name] = 2 + i
+	}
 	webHosts := map[string]bool{c.Domain: true}
 
 	// 网站：未配置时提供一个默认静态站，同时作为协议的伪装和回落
@@ -157,12 +163,19 @@ func (o *Orchestrator) Plan() *Plan {
 		sni := pc.SNI
 		if sni == "" {
 			sni = pc.Name + "." + c.Domain
+			if d, ok := a.(protocol.SNIDefaulter); ok {
+				sni = d.DefaultSNI()
+			}
+		}
+		passthrough := false
+		if pt, ok := a.(protocol.TLSPassthrough); ok {
+			passthrough = pt.PassthroughTLS()
 		}
 		port := pc.Port
 		if port == 0 {
 			port = c.Entry.HTTPSPort
 		}
-		svc := &Service{Cfg: pc, Adapter: a, SNI: sni, PublicPort: port}
+		svc := &Service{Cfg: pc, Adapter: a, SNI: sni, PublicPort: port, Passthrough: passthrough}
 
 		switch a.Transport() {
 		case protocol.TransportTCP:
@@ -193,10 +206,9 @@ func (o *Orchestrator) Plan() *Plan {
 
 		if svc.Network == "tcp" {
 			svc.ViaEntry = true
-			svc.Runtime.ListenAddr = loopback(nextLoopback)
-			nextLoopback++
+			svc.Runtime.ListenAddr = loopback(protocolPort[pc.Name])
 			srv := tcpServer(port)
-			srv.Routes = append(srv.Routes, caddy.TCPRoute{Name: pc.Name, SNI: sni, Upstream: svc.Runtime.ListenAddr})
+			srv.Routes = append(srv.Routes, caddy.TCPRoute{Name: pc.Name, SNI: sni, Upstream: svc.Runtime.ListenAddr, Passthrough: passthrough})
 		} else {
 			if _, ok := udpByPort[port]; !ok {
 				udpOrder = append(udpOrder, port)
@@ -204,7 +216,9 @@ func (o *Orchestrator) Plan() *Plan {
 			udpByPort[port] = append(udpByPort[port], svc)
 		}
 
-		addCert(sni)
+		if !passthrough { // 透传的协议自己处理 TLS，SNI 通常是别人的域名，不申请证书
+			addCert(sni)
+		}
 		p.Services = append(p.Services, svc)
 	}
 
@@ -218,8 +232,7 @@ func (o *Orchestrator) Plan() *Plan {
 		srv := caddy.UDPServer{Port: port}
 		for _, svc := range udpByPort[port] {
 			svc.ViaEntry = true
-			svc.Runtime.ListenAddr = loopback(nextLoopback)
-			nextLoopback++
+			svc.Runtime.ListenAddr = loopback(protocolPort[svc.Cfg.Name])
 			srv.Routes = append(srv.Routes, caddy.UDPRoute{Name: svc.Cfg.Name, SNI: svc.SNI, Upstream: svc.Runtime.ListenAddr})
 		}
 		udpServers = append(udpServers, srv)
@@ -231,6 +244,7 @@ func (o *Orchestrator) Plan() *Plan {
 	}
 	for _, svc := range p.Services {
 		svc.Runtime.SiteURL = "http://" + sitePlainAddr
+		svc.Runtime.SNI = svc.SNI
 		if cc, ok := svc.Adapter.(protocol.CertConsumer); ok && cc.NeedsCertificate() {
 			for i := range p.Certs {
 				if p.Certs[i].Name == svc.SNI {

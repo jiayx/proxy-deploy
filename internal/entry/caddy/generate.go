@@ -45,11 +45,13 @@ func CertPaths(storageRoot string, iss Issuer, name string) (crt, key string) {
 	return dir + "/" + name + ".crt", dir + "/" + name + ".key"
 }
 
-// TCPRoute 是 TCP 入口上的一条 SNI 路由。网关用统一证书终结 TLS 后把明文转发到 Upstream
+// TCPRoute 是 TCP 入口上的一条 SNI 路由。网关用统一证书终结 TLS 后把明文转发到 Upstream；
+// Passthrough 时原样转发，由后端自己处理 TLS（例如 Reality）
 type TCPRoute struct {
-	Name     string // 路由名，用于网关日志和统计，即协议名
-	SNI      string
-	Upstream string
+	Name        string // 路由名，用于网关日志和统计，即协议名
+	SNI         string
+	Upstream    string
+	Passthrough bool
 }
 
 // TCPServer 是一个 TCP 入口端口。未匹配任何路由的流量交给内部网站
@@ -168,7 +170,11 @@ func gatewayApp(s Spec) obj {
 	for _, srv := range s.TCPServers {
 		routes := []obj{}
 		for _, r := range srv.Routes {
-			routes = append(routes, obj{"name": r.Name, "sni": []string{r.SNI}, "tls": "terminate", "upstream": r.Upstream})
+			mode := "terminate"
+			if r.Passthrough {
+				mode = "passthrough"
+			}
+			routes = append(routes, obj{"name": r.Name, "sni": []string{r.SNI}, "tls": mode, "upstream": r.Upstream})
 		}
 		servers[fmt.Sprintf("tcp_%d", srv.Port)] = obj{
 			"listen": []string{fmt.Sprintf(":%d", srv.Port)},

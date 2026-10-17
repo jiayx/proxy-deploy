@@ -8,7 +8,9 @@ import (
 	"github.com/jiayx/proxy-deploy/internal/protocol"
 	"github.com/jiayx/proxy-deploy/internal/protocol/anytls"
 	"github.com/jiayx/proxy-deploy/internal/protocol/hysteria2"
+	"github.com/jiayx/proxy-deploy/internal/protocol/vlessreality"
 	"github.com/jiayx/proxy-deploy/pkg/paths"
+	"github.com/jiayx/proxy-deploy/pkg/secrets"
 )
 
 func newOrch(t *testing.T, cfg *config.DeployConfig) *Orchestrator {
@@ -20,6 +22,7 @@ func newOrch(t *testing.T, cfg *config.DeployConfig) *Orchestrator {
 	reg := protocol.NewRegistry()
 	reg.Register(hysteria2.New(layout))
 	reg.Register(anytls.New(layout))
+	reg.Register(vlessreality.New(layout))
 	return New(reg, cfg, layout)
 }
 
@@ -125,7 +128,7 @@ func TestPlanUDPThroughGateway(t *testing.T) {
 	for _, r := range p.Caddy.UDPServers[0].Routes {
 		routes = append(routes, r.Name+"="+r.SNI+"→"+r.Upstream)
 	}
-	want := "hysteria2=hysteria2.example.com→127.0.0.1:20002,tuic=tuic.example.com→127.0.0.1:20003"
+	want := "hysteria2=hysteria2.example.com→127.0.0.1:20003,tuic=tuic.example.com→127.0.0.1:20004"
 	if got := strings.Join(routes, ","); got != want {
 		t.Fatalf("routes:\n got %s\nwant %s", got, want)
 	}
@@ -135,6 +138,57 @@ func TestPlanUDPGatewayWithoutUDPProtocols(t *testing.T) {
 	p := newOrch(t, baseConfig(proto("anytls"))).Plan()
 	if len(p.Caddy.UDPServers) != 1 || p.Caddy.UDPServers[0].Port != 443 || len(p.Caddy.UDPServers[0].Routes) != 0 {
 		t.Fatalf("entry port should always have a UDP gateway for the site's HTTP/3, got %+v", p.Caddy.UDPServers)
+	}
+}
+
+func realityProto(extra ...func(*config.ProtocolConfig)) config.ProtocolConfig {
+	priv, _ := secrets.RealityKeyPair()
+	p := config.ProtocolConfig{Name: "vless-reality", Enabled: true, Config: map[string]any{
+		"uuid": secrets.UUID(), "private_key": priv, "short_id": secrets.ShortID()}}
+	for _, f := range extra {
+		f(&p)
+	}
+	return p
+}
+
+func TestPlanRealityPassthrough(t *testing.T) {
+	p := newOrch(t, baseConfig(proto("anytls"), realityProto())).Plan()
+	if len(p.Conflicts) != 0 {
+		t.Fatalf("unexpected conflicts: %+v", p.Conflicts)
+	}
+	routes := p.Caddy.TCPServers[0].Routes
+	if len(routes) != 2 || routes[0].Passthrough || !routes[1].Passthrough || routes[1].SNI != "www.microsoft.com" {
+		t.Fatalf("reality should be a passthrough route on the default SNI: %+v", routes)
+	}
+	for _, c := range p.Certs {
+		if c.Name == "www.microsoft.com" {
+			t.Fatal("must not request a certificate for the passthrough SNI")
+		}
+	}
+	if svc := p.Services[1]; svc.Runtime.SNI != "www.microsoft.com" || svc.Runtime.Cert != nil {
+		t.Fatalf("unexpected reality runtime: %+v", svc.Runtime)
+	}
+
+	p = newOrch(t, baseConfig(realityProto(func(c *config.ProtocolConfig) { c.SNI = "example.com" }))).Plan()
+	if len(p.Conflicts) != 1 || !strings.Contains(p.Conflicts[0].Reason, "网站域名") {
+		t.Fatalf("reality SNI equal to the site domain should conflict: %+v", p.Conflicts)
+	}
+}
+
+func TestPlanLoopbackPortsStable(t *testing.T) {
+	ports := func(cfg *config.DeployConfig) map[string]string {
+		out := map[string]string{}
+		for _, s := range newOrch(t, cfg).Plan().Services {
+			out[s.Cfg.Name] = s.Runtime.ListenAddr
+		}
+		return out
+	}
+	before := ports(baseConfig(proto("hysteria2"), proto("anytls")))
+	after := ports(baseConfig(proto("hysteria2"), proto("anytls"), realityProto()))
+	for name, addr := range before {
+		if after[name] != addr {
+			t.Fatalf("enabling another protocol moved %s from %s to %s", name, addr, after[name])
+		}
 	}
 }
 

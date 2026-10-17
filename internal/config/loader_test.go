@@ -24,8 +24,8 @@ func TestExampleLoads(t *testing.T) {
 	if cfg.Server.Address != "example.com" || cfg.Entry.HTTPSPort != 443 || cfg.Entry.HTTPPort != 80 {
 		t.Fatalf("unexpected defaults: %+v", cfg)
 	}
-	if len(cfg.Protocols) != 2 {
-		t.Fatalf("want 2 protocols, got %d", len(cfg.Protocols))
+	if len(cfg.Protocols) != 3 || cfg.Protocols[2].Name != "vless-reality" || cfg.Protocols[2].Enabled {
+		t.Fatalf("want hysteria2, anytls and a disabled vless-reality, got %+v", cfg.Protocols)
 	}
 	p0, p1 := cfg.Protocols[0].Config["password"], cfg.Protocols[1].Config["password"]
 	if p0 == "" || p0 == "change-me" || p0 == p1 {

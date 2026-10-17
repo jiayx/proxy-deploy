@@ -2,7 +2,7 @@
 
 `proxyd` 是一个面向 Linux / systemd 的代理服务部署编排 CLI。它把 Caddy（含本仓库实现的入口网关 `proxy_gateway`）、代理协议服务和网站组合成一套部署：根据 YAML 配置规划公网入口、管理证书、安装二进制、生成配置与 systemd unit，并提供状态、日志、重启和卸载命令。
 
-当前支持 **AnyTLS（TCP）** 和 **Hysteria2（QUIC / UDP）**，服务端均由 sing-box 提供；网站支持静态文件和反向代理。支持系统级部署和 `--user` 用户级部署。
+当前支持 **AnyTLS（TCP）**、**VLESS + Reality（TCP）** 和 **Hysteria2（QUIC / UDP）**，服务端均由 sing-box 提供；网站支持静态文件和反向代理。支持系统级部署和 `--user` 用户级部署。
 
 ## 工作方式
 
@@ -11,6 +11,7 @@
 ```text
 公网 TCP/443 → 网关（proxy_gateway）按 TLS SNI 分流
                ├─ anytls.example.com    → 网关终结 TLS → 回环地址上的 AnyTLS（sing-box）
+               ├─ www.microsoft.com     → 原样透传 → 回环地址上的 VLESS + Reality（sing-box，自己握手）
                └─ 其他 SNI / 非 TLS 流量 → 内部 HTTPS 网站（127.0.0.1:20000，附 PROXY protocol）
 
 公网 UDP/443 → 网关按 QUIC SNI 分流（解密 QUIC Initial 包取得 ClientHello）
@@ -25,7 +26,7 @@
 - 主入口端口总是开启 UDP 网关：内部网站因此提供 HTTP/3，TCP 网站通过 `Alt-Svc` 通告对外端口。需要放行 UDP/443。
 - 网关为每个连接（UDP 为每个会话）记录一条日志（客户端地址、SNI、路由、后端本地地址、字节数、时长），`status` 显示每条路由的活动连接、累计连接和流量。网关重载配置时不会断开已建立的 TCP 连接和 QUIC 会话。
 - UDP 会话按客户端地址识别，空闲 2 分钟后清理。网关同时学习每个会话的 QUIC 连接 ID，客户端地址变化（NAT 重新映射、切换网络但沿用原 socket）后仍能找回原会话，连接不断；客户端主动迁移并换用新连接 ID 时需要重新连接。Linux 上网关用 UDP GRO/GSO 成批转发后端回包。
-- 内部网站以 HTTPS 监听 `127.0.0.1:20000`（供 TCP 入口转发，支持 HTTP/1.1 和 HTTP/2；入口通过 PROXY protocol 传递客户端地址，网站访问日志和反代后端的 `X-Forwarded-For` 都是真实 IP），同时以明文 HTTP 监听 `127.0.0.1:20001`（供协议伪装反代，保留原始 Host）；协议回环后端从 `20002` 起分配。
+- 内部网站以 HTTPS 监听 `127.0.0.1:20000`（供 TCP 入口转发，支持 HTTP/1.1 和 HTTP/2；入口通过 PROXY protocol 传递客户端地址，网站访问日志和反代后端的 `X-Forwarded-For` 都是真实 IP），同时以明文 HTTP 监听 `127.0.0.1:20001`（供协议伪装反代，保留原始 Host）；协议回环后端从 `20002` 起按协议名固定分配（所有支持的协议按名称排序，各占一个端口），启用或停用其他协议不会改变已有协议的端口。
 - 协议后端（sing-box）日志中的来源地址都是 `127.0.0.1`：sing-box 自 1.6 起不再支持 PROXY protocol。客户端真实地址记录在网关日志中，网关日志的 `upstream_local` 与 sing-box 日志中的来源端口一一对应。
 - Caddy 统一管理主域名、启用协议的 SNI 和网站 `host` 的证书。Hysteria2 启动前会等待证书文件就绪（最多 3 分钟），续期后 sing-box 自动重新加载证书文件，无需重启服务；AnyTLS 的客户端 TLS 在 Caddy 终结，无需读取证书文件。
 
@@ -104,15 +105,24 @@ web:
 | `domain` | 必填，主域名和默认网站证书域名 |
 | `server.address` | 客户端实际连接地址，默认等于 `domain`，可填 IP；不改变用于 TLS 的 SNI |
 | `entry.https_port` / `http_port` | 默认 `443` / `80`，两者必须不同 |
-| `protocols[].name` | 当前可用 `anytls`、`hysteria2` |
+| `protocols[].name` | 当前可用 `anytls`、`hysteria2`、`vless-reality` |
 | `protocols[].enabled` | 只有显式设为 `true` 才启用 |
 | `protocols[].port` | 公网端口，默认使用 `entry.https_port` |
-| `protocols[].sni` | 默认 `<name>.<domain>`；TCP 协议的 SNI 必须与主域名及网站 `host` 不同 |
+| `protocols[].sni` | 默认 `<name>.<domain>`（`vless-reality` 默认 `www.microsoft.com`）；TCP 协议的 SNI 必须与主域名及网站 `host` 不同 |
 | `protocols[].config.password` | 两种协议均必填，不能是占位值 `change-me` |
 | `anytls` 的 `config.padding_scheme` | 可选，填充方案，多行字符串或字符串列表，每行一条规则；格式同 sing-box anytls inbound |
 | `hysteria2` 的 `config.masquerade_url` | 可选，覆盖默认的内部伪装网站地址 |
+| `vless-reality` 的 `config.uuid` / `private_key` / `short_id` | 必填，`init-config` 会生成；公钥由私钥推导，出现在客户端链接中 |
+| `vless-reality` 的 `config.handshake` | 可选，伪装握手的目标 `host:port`，默认是 `sni` 的 443 端口 |
 
 每种协议只能配置一个实例（重复的 `name` 会被拒绝）：配置路径和后端进程都按协议名标识。配置中出现未知字段（例如拼错的字段名）时加载直接报错。
+
+### VLESS + Reality
+
+Reality 自己完成 TLS 握手：客户端使用伪装目标网站的 SNI（默认 `www.microsoft.com`），网关按这个 SNI 把连接原样透传给 sing-box，不终结 TLS，也不为它申请证书。认证通过的连接被代理；未通过的连接（包括主动探测）由 sing-box 转给真正的目标网站，探测者拿到的是目标网站的真实证书和内容。
+
+- 伪装目标应选择离服务器近、支持 TLS 1.3 和 HTTP/2 的网站，并且服务器能访问到它；不要用本机网站的域名（规划时会报冲突）。
+- 示例配置中 `vless-reality` 默认不启用，改为 `enabled: true` 即可；凭据由 `init-config` 生成，重复部署保持不变。
 
 ### 证书
 

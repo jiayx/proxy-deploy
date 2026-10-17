@@ -37,6 +37,7 @@ type Adapter interface {
 // Runtime 是编排器在规划后提供给适配器的运行信息
 type Runtime struct {
 	ListenAddr string              // 服务端应监听的地址
+	SNI        string              // 客户端使用的 SNI
 	Cert       *config.Certificate // 统一管理的证书；仅 CertConsumer 会拿到
 	SiteURL    string              // 内部网站的明文 HTTP 地址（回环），可用于伪装或回落
 }
@@ -57,6 +58,17 @@ type Validator interface {
 // 部署时先把配置写到临时路径 path 并校验，通过后才替换正式配置
 type ConfigChecker interface {
 	CheckConfig(ctx context.Context, path string) error
+}
+
+// TLSPassthrough 由自己处理 TLS 握手的 TCP 协议实现（例如 Reality）。
+// 网关按 SNI 匹配后原样转发，不终结 TLS，也不为它的 SNI 申请证书
+type TLSPassthrough interface {
+	PassthroughTLS() bool
+}
+
+// SNIDefaulter 由默认 SNI 不是 <name>.<domain> 的协议实现，例如 Reality 使用伪装目标网站的域名
+type SNIDefaulter interface {
+	DefaultSNI() string
 }
 
 // CertConsumer 由需要读取证书文件的协议实现。

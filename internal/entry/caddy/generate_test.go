@@ -28,8 +28,11 @@ func TestGenerate(t *testing.T) {
 		HTTPPort:      8080,
 		SiteAddr:      "127.0.0.1:20000",
 		SitePlainAddr: "127.0.0.1:20001",
-		TCPServers:    []TCPServer{{Port: 8443, Routes: []TCPRoute{{Name: "anytls", SNI: "t.a.com", Upstream: "127.0.0.1:20002"}}}},
-		UDPServers:    []UDPServer{{Port: 8443, Routes: []UDPRoute{{Name: "hysteria2", SNI: "h.a.com", Upstream: "127.0.0.1:20003"}}}},
+		TCPServers: []TCPServer{{Port: 8443, Routes: []TCPRoute{
+			{Name: "anytls", SNI: "t.a.com", Upstream: "127.0.0.1:20002"},
+			{Name: "vless-reality", SNI: "www.example.org", Upstream: "127.0.0.1:20004", Passthrough: true},
+		}}},
+		UDPServers: []UDPServer{{Port: 8443, Routes: []UDPRoute{{Name: "hysteria2", SNI: "h.a.com", Upstream: "127.0.0.1:20003"}}}},
 		Backends: []Backend{{Name: "hysteria2", Command: []string{"/opt/pd/bin/sing-box", "run", "-c", "/opt/pd/etc/hysteria2/config.json"},
 			RequireFiles: []string{"/c.crt"}, Revision: "r1"}},
 		Sites: []Site{{Root: "/www"}, {Host: "app.a.com", Upstream: "127.0.0.1:3000"}},
@@ -74,6 +77,9 @@ func TestGenerate(t *testing.T) {
 	route := gw["routes"].([]any)[0].(map[string]any)
 	if route["name"] != "anytls" || route["tls"] != "terminate" || route["upstream"] != "127.0.0.1:20002" {
 		t.Fatalf("unexpected gateway route: %v", route)
+	}
+	if r := gw["routes"].([]any)[1].(map[string]any); r["tls"] != "passthrough" || r["sni"].([]any)[0] != "www.example.org" {
+		t.Fatalf("reality route should pass TLS through: %v", r)
 	}
 	if fb := gw["fallback"].(map[string]any); fb["tls"] != "passthrough" || fb["upstream"] != "127.0.0.1:20000" {
 		t.Fatalf("unexpected gateway fallback: %v", fb)
