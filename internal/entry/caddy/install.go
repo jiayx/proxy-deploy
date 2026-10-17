@@ -20,40 +20,37 @@ var requiredModules = []string{"proxy_gateway", "admin.api.proxy_gateway"}
 
 // Install 安装带 proxy_gateway 网关的 Caddy（本仓库 cmd/caddy），按优先级：
 //  1. localBinary 非空：复制调用方提供的二进制
-//  2. 安装目录中已有二进制且包含所需模块：直接复用
-//  3. 下载本项目发布的预构建二进制（同时替换缺少模块的旧版本）
+//  2. 安装目录中已有二进制：直接复用
+//  3. 下载本项目发布的预构建二进制
 //
-// 无论哪种来源，最后都校验所需模块是否存在。
-func Install(ctx context.Context, layout *paths.Layout, localBinary string) error {
+// 无论哪种来源，最后都校验所需模块是否存在。changed 表示二进制被替换，
+// 正在运行的 Caddy 需要重启（reload 不会换掉进程）。
+func Install(ctx context.Context, layout *paths.Layout, localBinary string) (changed bool, err error) {
 	dest := layout.CaddyBin()
 
 	switch {
 	case localBinary != "":
 		if err := system.CopyFile(localBinary, dest, 0755); err != nil {
-			return fmt.Errorf("copy caddy binary: %w", err)
+			return false, fmt.Errorf("copy caddy binary: %w", err)
 		}
-	case fileExists(dest) && verifyModules(ctx, dest) == nil:
+	case fileExists(dest):
+		return false, verifyModules(ctx, dest)
 	default:
 		if err := downloadPrebuilt(ctx, dest); err != nil {
-			return fmt.Errorf("download prebuilt caddy: %w; 也可以用 go build ./cmd/caddy 构建后通过 --caddy-binary 指定", err)
+			return false, fmt.Errorf("download prebuilt caddy: %w; 也可以用 go build ./cmd/caddy 构建后通过 --caddy-binary 指定", err)
 		}
 	}
-	return verifyModules(ctx, dest)
+	return true, verifyModules(ctx, dest)
 }
 
-// downloadPrebuilt 下载 CI 发布的预构建二进制，用同时发布的 .sha256 文件校验，覆盖已有文件
+// downloadPrebuilt 下载 CI 发布的预构建二进制，用同时发布的 .sha256 文件校验
 func downloadPrebuilt(ctx context.Context, dest string) error {
 	url := fmt.Sprintf("%s/caddy-gateway-%s-%s", releaseBase, runtime.GOOS, runtime.GOARCH)
 	sum, err := system.FetchChecksum(ctx, url+".sha256")
 	if err != nil {
 		return err
 	}
-	tmp := dest + ".download"
-	_ = os.Remove(tmp)
-	if err := system.Download(ctx, url, sum, tmp, 0755); err != nil {
-		return err
-	}
-	return os.Rename(tmp, dest)
+	return system.Download(ctx, url, sum, dest, 0755)
 }
 
 func verifyModules(ctx context.Context, bin string) error {

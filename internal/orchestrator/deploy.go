@@ -35,7 +35,8 @@ func (o *Orchestrator) Deploy(ctx context.Context, p *Plan, caddyBinary string, 
 	}
 
 	logf("安装 Caddy（网关）")
-	if err := caddy.Install(ctx, o.layout, caddyBinary); err != nil {
+	caddyChanged, err := caddy.Install(ctx, o.layout, caddyBinary)
+	if err != nil {
 		return err
 	}
 	for _, s := range p.Services {
@@ -55,20 +56,11 @@ func (o *Orchestrator) Deploy(ctx context.Context, p *Plan, caddyBinary string, 
 	for _, c := range p.Certs {
 		m.Certs = append(m.Certs, CertFile{c.Name, c.CertPath})
 	}
+	// 停掉任何服务之前先检查协议配置；依赖的证书尚未签发（首次部署）的协议留到证书就绪后再检查
+	if err := o.writeProtocolConfigs(ctx, p, true); err != nil {
+		return err
+	}
 	for _, s := range p.Services {
-		data, err := s.Adapter.GenerateConfig(s.Cfg, s.Runtime)
-		if err != nil {
-			return fmt.Errorf("%s config: %w", s.Cfg.Name, err)
-		}
-		if data != nil {
-			check := func(string) error { return nil }
-			if c, ok := s.Adapter.(protocol.ConfigChecker); ok {
-				check = func(path string) error { return c.CheckConfig(ctx, path) }
-			}
-			if err := system.WriteFileChecked(s.Adapter.ConfigPath(), data, 0600, check); err != nil {
-				return fmt.Errorf("%s config: %w", s.Cfg.Name, err)
-			}
-		}
 		svc, err := s.Adapter.Service(s.Cfg, s.Runtime)
 		if err != nil {
 			return fmt.Errorf("%s service: %w", s.Cfg.Name, err)
@@ -96,7 +88,7 @@ func (o *Orchestrator) Deploy(ctx context.Context, p *Plan, caddyBinary string, 
 		}
 	}
 	// Caddy 的 unit 或二进制变化后 reload 不会生效，需要重启
-	restartCaddy := caddyBinary != ""
+	restartCaddy := caddyChanged
 	for _, u := range units {
 		path := o.layout.UnitPath(u.Name)
 		if old, err := os.ReadFile(path); u.Name == caddyUnit && (err != nil || string(old) != u.Content) {
@@ -137,6 +129,9 @@ func (o *Orchestrator) Deploy(ctx context.Context, p *Plan, caddyBinary string, 
 	}
 
 	if err := o.waitCerts(ctx, p, logf); err != nil {
+		return err
+	}
+	if err := o.writeProtocolConfigs(ctx, p, false); err != nil {
 		return err
 	}
 
@@ -180,6 +175,37 @@ func currentUser() string {
 		return u.Username
 	}
 	return os.Getenv("USER")
+}
+
+// writeProtocolConfigs 生成协议配置，校验通过后写入。dryRun 时只校验不写入，
+// 并跳过证书文件还不存在的协议（配置引用证书，签发前无法校验）
+func (o *Orchestrator) writeProtocolConfigs(ctx context.Context, p *Plan, dryRun bool) error {
+	for _, s := range p.Services {
+		if dryRun && s.Runtime.Cert != nil {
+			if _, err := os.Stat(s.Runtime.Cert.CertPath); err != nil {
+				continue
+			}
+		}
+		data, err := s.Adapter.GenerateConfig(s.Cfg, s.Runtime)
+		if err != nil {
+			return fmt.Errorf("%s config: %w", s.Cfg.Name, err)
+		}
+		if data == nil {
+			continue
+		}
+		check := func(string) error { return nil }
+		if c, ok := s.Adapter.(protocol.ConfigChecker); ok {
+			check = func(path string) error { return c.CheckConfig(ctx, path) }
+		}
+		write := system.WriteFileChecked
+		if dryRun {
+			write = system.CheckFile
+		}
+		if err := write(s.Adapter.ConfigPath(), data, 0600, check); err != nil {
+			return fmt.Errorf("%s config: %w", s.Cfg.Name, err)
+		}
+	}
+	return nil
 }
 
 // preflight 检查部署需要的端口是否被其他进程占用；本部署已占用的端口跳过

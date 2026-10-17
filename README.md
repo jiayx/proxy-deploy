@@ -194,8 +194,8 @@ sudo ./proxyd uninstall
 部署使用的 Caddy 由本仓库的 `cmd/caddy` 构建：官方标准模块加上 `gateway/` 中的入口网关，Caddy 及依赖版本由 `go.mod` 固定，`go build ./cmd/caddy` 即可构建。安装来源按以下优先级选择，并在安装后检查网关模块：
 
 1. `--caddy-binary` 指定的本地文件。
-2. 安装目录中已有的 `bin/caddy`，且包含所需模块。
-3. 本项目 GitHub Releases 中 `caddy` release 的 `caddy-gateway-<os>-<arch>` 预构建文件，用同时发布的 `.sha256` 文件校验；缺少模块的旧版本也会被替换。该 release 由 `.github/workflows/caddy.yml` 在网关代码或依赖变化时构建 linux amd64 / arm64。
+2. 安装目录中已有的 `bin/caddy`。
+3. 本项目 GitHub Releases 中 `caddy` release 的 `caddy-gateway-<os>-<arch>` 预构建文件，用同时发布的 `.sha256` 文件校验。该 release 由 `.github/workflows/caddy.yml` 在网关代码或依赖变化时构建 linux amd64 / arm64。
 
 协议程序从各自上游 GitHub Releases 下载，版本和各平台的 sha256 固定在适配器源码中（当前 sing-box `1.14.3`，支持 linux amd64 / arm64），校验不通过不会写入文件。所有协议都使用 sing-box 作为服务端：共用一份二进制，每个协议运行独立的进程和 unit，修改或重启某个协议不影响其他协议的连接。程序按版本保存并通过符号链接使用；重复部署会复用已存在的版本，部署成功后清理 `bin/` 中不再使用的程序和版本；更新配置不会自动追踪上游最新版本。部署主机需能访问相应下载地址。
 
