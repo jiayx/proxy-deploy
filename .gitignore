@@ -1,0 +1,5 @@
+/proxyd
+/dist/
+*.test
+deploy.yaml
+.DS_Store

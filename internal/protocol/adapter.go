@@ -1,0 +1,132 @@
+package protocol
+
+import (
+	"context"
+	"sort"
+
+	"github.com/jiayx/proxy-deploy/internal/config"
+)
+
+// Adapter 是每种代理协议的适配接口。
+// 编排器负责端口规划、证书、systemd 和入口路由，适配器只描述协议本身：
+// 怎么安装、配置文件长什么样、怎么启动、客户端怎么连。
+type Adapter interface {
+	// Name 返回协议标识符，与 deploy.yaml 中的 name 字段一致
+	Name() string
+
+	// Transport 返回传输层类型，决定入口如何规划
+	Transport() Transport
+
+	// Install 下载并安装协议二进制，幂等
+	Install(ctx context.Context) error
+
+	// GenerateConfig 生成配置文件内容；返回 nil 表示该协议不使用配置文件
+	GenerateConfig(cfg *config.ProtocolConfig, rt Runtime) ([]byte, error)
+
+	// ConfigPath 返回协议配置文件路径
+	ConfigPath() string
+
+	// Service 返回启动服务端的命令和环境变量
+	Service(cfg *config.ProtocolConfig, rt Runtime) (*Service, error)
+
+	// ClientConfig 返回供客户端连接用的配置信息
+	ClientConfig(cfg *config.ProtocolConfig, c ClientContext) (*config.ClientConfig, error)
+}
+
+// Runtime 是编排器在规划后提供给适配器的运行信息
+type Runtime struct {
+	ListenAddr string              // 服务端应监听的地址
+	Cert       *config.Certificate // 统一管理的证书；仅 CertConsumer 会拿到
+	SiteURL    string              // 内部网站地址，可用于伪装或回落
+}
+
+// Service 描述一个服务端进程
+type Service struct {
+	// Args 第一个元素是可执行文件绝对路径。需要引用 Env 中的值时用 EnvRef，
+	// 这样敏感信息只写入权限为 0600 的环境文件，不出现在 unit 文件里
+	Args []string
+	Env  map[string]string
+}
+
+// EnvRef 返回在 Service.Args 中引用环境变量的写法
+func EnvRef(name string) string { return "${" + name + "}" }
+
+// Validator 由需要在规划阶段校验配置的协议实现
+type Validator interface {
+	Validate(cfg *config.ProtocolConfig) error
+}
+
+// CertConsumer 由需要读取证书文件的协议实现。
+// 编排器会等证书签发后再启动它，并在证书续期后自动重启它。
+type CertConsumer interface {
+	NeedsCertificate() bool
+}
+
+// TLSBackend 由自身强制 TLS 的 TCP 协议实现。
+// Caddy 终结客户端 TLS 后，会以 TLS（跳过校验）连接这类后端。
+type TLSBackend interface {
+	BackendTLS() bool
+}
+
+// ClientContext 是客户端连接所需的入口信息，由编排器根据端口规划提供
+type ClientContext struct {
+	Host     string // 客户端连接的服务器地址
+	Port     int    // 公网端口
+	SNI      string
+	Insecure bool // 证书不被公共 CA 信任（例如 Caddy 内部 CA）
+}
+
+// Transport 表示协议使用的传输层
+type Transport int
+
+const (
+	TransportTCP  Transport = iota // TCP，可共享入口端口，由 Caddy l4 按 SNI 转发
+	TransportUDP                   // UDP/QUIC，单独占用端口，或同端口按 QUIC SNI 分流
+	TransportBoth                  // 同时监听 TCP 和 UDP
+)
+
+func (t Transport) String() string {
+	switch t {
+	case TransportTCP:
+		return "tcp"
+	case TransportUDP:
+		return "udp"
+	case TransportBoth:
+		return "tcp+udp"
+	}
+	return "unknown"
+}
+
+// StringOption 读取协议配置中的字符串选项
+func StringOption(cfg *config.ProtocolConfig, key string) string {
+	s, _ := cfg.Config[key].(string)
+	return s
+}
+
+// Registry 管理所有已注册的协议适配器
+type Registry struct {
+	adapters map[string]Adapter
+}
+
+func NewRegistry() *Registry {
+	return &Registry{adapters: make(map[string]Adapter)}
+}
+
+func (r *Registry) Register(a Adapter) {
+	r.adapters[a.Name()] = a
+}
+
+func (r *Registry) Get(name string) (Adapter, bool) {
+	a, ok := r.adapters[name]
+	return a, ok
+}
+
+// Names 返回已注册的协议名，按字母序
+func (r *Registry) Names() []string {
+	names := make([]string, 0, len(r.adapters))
+	for n := range r.adapters {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
