@@ -240,3 +240,45 @@ func TestUDPConnectionIDsKeepMostRecent(t *testing.T) {
 		t.Fatal("oldest connection IDs should be evicted first")
 	}
 }
+
+// udpEchoServer 把收到的数据报原样发回
+func udpEchoServer(t *testing.T) string {
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pc.Close() })
+	go func() {
+		buf := make([]byte, 65535)
+		for {
+			n, addr, err := pc.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			pc.WriteTo(buf[:n], addr)
+		}
+	}()
+	return pc.LocalAddr().String()
+}
+
+func TestUDPRawServer(t *testing.T) {
+	ss := &Route{Name: "ss2022", TLS: TLSPassthrough, Upstream: udpEchoServer(t)}
+	gw := startUDPGateway(t, &Server{Fallback: ss, Raw: true})
+	c, err := net.Dial("udp", gw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	for _, msg := range []string{"random bytes, not QUIC", "\xc0\x00\x00\x00\x01 looks like a QUIC long header"} {
+		c.Write([]byte(msg))
+		c.SetReadDeadline(time.Now().Add(time.Second))
+		buf := make([]byte, 100)
+		n, err := c.Read(buf)
+		if err != nil || string(buf[:n]) != msg {
+			t.Fatalf("raw UDP should forward any datagram: %q %v", buf[:n], err)
+		}
+	}
+	if ss.stats.Total.Load() != 1 || ss.stats.Active.Load() != 1 {
+		t.Fatalf("want one session, got total=%d active=%d", ss.stats.Total.Load(), ss.stats.Active.Load())
+	}
+}

@@ -75,6 +75,7 @@ type udpSession struct {
 	lastCID []byte   // 客户端最近使用的连接 ID，变化时才登记；由 mu 保护
 
 	cidLen atomic.Int32 // 服务端连接 ID 长度，握手时从源连接 ID 学到
+	raw    bool         // 专用端口：不识别 QUIC，直接交给 fallback，也不学习连接 ID
 
 	client         atomic.Pointer[net.UDPAddr] // 回包地址，迁移时更新
 	lastActive     atomic.Int64                // UnixNano，任一方向有数据
@@ -173,11 +174,11 @@ func (t *udpTable) handle(addr net.Addr, data []byte) {
 		return
 	}
 	srv := t.server
-	if srv == nil || !isQUICInitial(data) {
+	if srv == nil || (!srv.Raw && !isQUICInitial(data)) {
 		t.mu.Unlock()
 		return // 无法归属到任何会话的数据报
 	}
-	sess = &udpSession{key: key, start: time.Now(),
+	sess = &udpSession{key: key, start: time.Now(), raw: srv.Raw,
 		log: srv.logger.With(zap.String("remote", key), zap.String("network", "udp"))}
 	sess.client.Store(client)
 	sess.lastFromClient.Store(time.Now().UnixNano())
@@ -313,8 +314,20 @@ func (t *udpTable) forward(sess *udpSession, data []byte) {
 	if sess.upstream != nil {
 		sess.up.Add(int64(len(data)))
 		sess.route.stats.BytesUp.Add(int64(len(data)))
-		t.learnClientCID(sess, data)
+		if !sess.raw {
+			t.learnClientCID(sess, data)
+		}
 		_, _ = sess.upstream.Write(data)
+		return
+	}
+	if sess.raw {
+		srv, _ := t.current()
+		if srv == nil || srv.Fallback == nil {
+			t.drop(sess)
+			return
+		}
+		sess.pending = append(sess.pending, append([]byte(nil), data...))
+		t.connect(sess, srv.Fallback)
 		return
 	}
 
@@ -360,6 +373,11 @@ func (t *udpTable) forward(sess *udpSession, data []byte) {
 		t.drop(sess)
 		return
 	}
+	t.connect(sess, route)
+}
+
+// connect 连接后端并回放缓存的数据报，然后开始转发回包；调用方持有 sess.mu
+func (t *udpTable) connect(sess *udpSession, route *Route) {
 	raddr, err := net.ResolveUDPAddr("udp", route.Upstream)
 	if err == nil {
 		sess.upstream, err = net.DialUDP("udp", nil, raddr)
@@ -398,7 +416,9 @@ func (t *udpTable) pump(sess *udpSession) {
 		sess.touch()
 		sess.down.Add(int64(n))
 		sess.route.stats.BytesDown.Add(int64(n))
-		t.learnCIDs(sess, buf[:n], segment)
+		if !sess.raw {
+			t.learnCIDs(sess, buf[:n], segment)
+		}
 		if _, w := t.current(); w != nil {
 			_ = writeBatch(w, buf[:n], segment, sess.client.Load())
 		}

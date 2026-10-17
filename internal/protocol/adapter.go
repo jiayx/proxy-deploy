@@ -73,10 +73,10 @@ type LoopbackPorter interface {
 	LoopbackPort() int
 }
 
-// DirectListener 由不能经网关按 SNI 分流的协议实现（没有 TLS，例如 Shadowsocks）：
-// 协议直接监听公网端口，需要单独的端口，客户端真实地址对它可见
-type DirectListener interface {
-	ListenDirect() bool
+// DedicatedPort 由没有 SNI、网关无法分流的协议实现（没有 TLS，例如 Shadowsocks）：
+// 协议需要独占一个公网端口，网关在这个端口上不做识别，把全部连接转给它（TCP 和 UDP）
+type DedicatedPort interface {
+	NeedsDedicatedPort() bool
 }
 
 // SNIDefaulter 由默认 SNI 不是 <name>.<domain> 的协议实现，例如 Reality 使用伪装目标网站的域名

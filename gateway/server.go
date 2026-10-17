@@ -43,8 +43,12 @@ func (s *Server) match(sni string) *Route {
 
 func (s *Server) handle(conn net.Conn) {
 	start := time.Now()
-	_ = conn.SetReadDeadline(start.Add(time.Duration(s.HandshakeTimeout)))
-	hello, peeked := peekClientHello(conn)
+	var hello *tls.ClientHelloInfo
+	var peeked []byte
+	if !s.Raw {
+		_ = conn.SetReadDeadline(start.Add(time.Duration(s.HandshakeTimeout)))
+		hello, peeked = peekClientHello(conn)
+	}
 	sni := ""
 	if hello != nil {
 		sni = hello.ServerName

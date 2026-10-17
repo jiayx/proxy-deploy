@@ -40,6 +40,9 @@ type Server struct {
 	Listen   []string `json:"listen"`
 	Routes   []*Route `json:"routes,omitempty"`
 	Fallback *Route   `json:"fallback,omitempty"`
+	// Raw 表示这个端口专属于一个后端：不识别 TLS / QUIC，所有连接直接交给 Fallback。
+	// 用于没有 SNI 的协议（如 Shadowsocks），它们的首包是随机字节，识别只会造成误判和等待
+	Raw bool `json:"raw,omitempty"`
 
 	// HandshakeTimeout 限制读取 ClientHello 和终结 TLS 的时间，默认 10 秒
 	HandshakeTimeout caddy.Duration `json:"handshake_timeout,omitempty"`
@@ -124,6 +127,9 @@ func (a *App) Provision(ctx caddy.Context) error {
 		}
 		if srv.Fallback != nil && len(srv.Fallback.SNI) > 0 {
 			return fmt.Errorf("server %s: fallback must not set sni", name)
+		}
+		if srv.Raw && (len(srv.Routes) > 0 || srv.Fallback == nil || srv.Fallback.TLS != TLSPassthrough) {
+			return fmt.Errorf("server %s: raw requires a passthrough fallback and no routes", name)
 		}
 		if srv.HandshakeTimeout <= 0 {
 			srv.HandshakeTimeout = caddy.Duration(10 * time.Second)

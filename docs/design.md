@@ -57,6 +57,7 @@
 | `routes[].upstream` | 后端地址 |
 | `routes[].proxy_protocol` | 转发前写入 PROXY protocol v2 头，让后端拿到客户端地址（后端需支持；sing-box 不支持） |
 | `fallback` | 没有匹配到任何路由的连接（包括非 TLS 流量、ACME TLS-ALPN 验证）的去向 |
+| `raw` | 端口专属于一个后端（没有 SNI 的协议，如 Shadowsocks）：不识别 TLS / QUIC，全部连接直接交给 `fallback`；UDP 会话也不学习 QUIC 连接 ID |
 
 证书由 Caddy `tls` 应用的 `automate` 统一申请。网关终结 TLS 时使用 Caddy 的连接策略，按 SNI 取证书。
 

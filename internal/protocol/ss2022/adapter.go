@@ -1,7 +1,7 @@
 // Package ss2022 实现 Shadowsocks 2022（SIP022）协议的部署适配器，服务端使用 sing-box。
 //
-// Shadowsocks 没有 TLS 握手，网关无法按 SNI 分流，所以它直接监听一个单独的公网端口
-// （TCP 和 UDP），不经过网关。客户端真实地址对 sing-box 可见。
+// Shadowsocks 没有 TLS 握手，网关无法按 SNI 分流，所以它独占一个公网端口（TCP 和 UDP）：
+// 网关在这个端口上不做识别，把全部连接转给回环地址上的 sing-box，流量照样计入网关统计。
 package ss2022
 
 import (
@@ -41,7 +41,8 @@ func New(layout *paths.Layout) *Adapter {
 
 func (a *Adapter) Name() string                  { return name }
 func (a *Adapter) Transport() protocol.Transport { return protocol.TransportBoth }
-func (a *Adapter) ListenDirect() bool            { return true }
+func (a *Adapter) NeedsDedicatedPort() bool      { return true }
+func (a *Adapter) LoopbackPort() int             { return 20006 }
 func (a *Adapter) ConfigPath() string {
 	return filepath.Join(a.layout.ProtocolDir(name), "config.json")
 }

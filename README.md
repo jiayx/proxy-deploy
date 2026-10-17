@@ -2,7 +2,7 @@
 
 `proxyd` 是一个面向 Linux / systemd 的代理服务部署编排 CLI。它把 Caddy（含本仓库实现的入口网关 `proxy_gateway`）、代理协议服务和网站组合成一套部署：根据 YAML 配置规划公网入口、管理证书、安装二进制、生成配置与 systemd unit，并提供状态、日志、重启和卸载命令。
 
-当前支持 **AnyTLS**、**VLESS + Reality**（TCP，经网关）、**Hysteria2**、**TUIC v5**（QUIC，经网关）和 **Shadowsocks 2022**（TCP+UDP，直接监听单独端口），服务端均由 sing-box 提供；网站支持静态文件和反向代理。支持系统级部署和 `--user` 用户级部署。
+当前支持 **AnyTLS**、**VLESS + Reality**（TCP，经网关）、**Hysteria2**、**TUIC v5**（QUIC，经网关）和 **Shadowsocks 2022**（TCP+UDP，经网关的专用端口），服务端均由 sing-box 提供；网站支持静态文件和反向代理。支持系统级部署和 `--user` 用户级部署。
 
 ## 工作方式
 
@@ -22,7 +22,7 @@
 
 公网 TCP/80  → HTTP 跳转 HTTPS / ACME HTTP-01 验证
 
-公网 TCP+UDP/8388 → Shadowsocks 2022 直接监听（没有 TLS，网关无法分流）
+公网 TCP+UDP/8388 → 网关专用端口（没有 SNI，不识别直接转发）→ 回环地址上的 Shadowsocks 2022（sing-box）
 ```
 
 - 所有公网流量先进入网关，由网关决定交给网站还是代理协议，协议后端只监听回环地址；设计见 [docs/design.md](docs/design.md)。TCP 协议的客户端 TLS 由网关用统一管理的证书终结；QUIC 协议的数据报原样转发，由后端终结。多个协议可以共享同一个 TCP 或 UDP 端口，按 SNI 区分。
@@ -133,7 +133,7 @@ Reality 自己完成 TLS 握手：客户端使用伪装目标网站的 SNI（默
 
 ### Shadowsocks 2022
 
-Shadowsocks 没有 TLS 握手，网关无法按 SNI 分流，所以 `ss2022` 直接监听 `port` 指定的公网端口（TCP 和 UDP），不经过网关：需要在防火墙放行该端口的 TCP 和 UDP，`status` 的网关统计中也不会出现它；sing-box 日志能看到客户端真实地址。
+Shadowsocks 没有 TLS 握手，网关无法按 SNI 分流，所以 `ss2022` 独占 `port` 指定的公网端口（TCP 和 UDP）。网关在这个端口上以 `raw` 模式监听：不识别 TLS / QUIC，把全部连接原样转给回环地址上的 sing-box。流量和连接照样计入网关的统计和日志，客户端真实地址记录在网关日志中。需要在防火墙放行该端口的 TCP 和 UDP。
 
 ### 证书
 

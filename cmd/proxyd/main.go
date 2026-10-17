@@ -235,8 +235,8 @@ func printPlan(p *orchestrator.Plan) {
 	}
 	fmt.Printf("  TCP/%-5d HTTP 跳转 HTTPS / ACME 验证\n", p.Caddy.HTTPPort)
 	for _, s := range p.Services {
-		if s.Direct {
-			fmt.Printf("  %s/%d %s 直接监听（没有 TLS，不经网关）\n", strings.ToUpper(s.Network), s.PublicPort, s.Cfg.Name)
+		if s.Dedicated {
+			fmt.Printf("  %s/%d 网关（专用端口，不识别直接转发）→ %s %s\n", strings.ToUpper(s.Network), s.PublicPort, s.Cfg.Name, s.Runtime.ListenAddr)
 		}
 	}
 
@@ -244,8 +244,8 @@ func printPlan(p *orchestrator.Plan) {
 	for _, s := range p.Services {
 		cert, sni := "由网关终结 TLS", s.SNI
 		switch {
-		case s.Direct:
-			cert, sni = "无 TLS，直接监听", "—"
+		case s.Dedicated:
+			cert, sni = "无 TLS，网关专用端口转发", "—"
 		case s.Runtime.Cert != nil:
 			cert = "读取证书 " + s.Runtime.Cert.Name
 		case s.Passthrough:

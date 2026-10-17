@@ -74,6 +74,14 @@ type UDPServer struct {
 	Routes []UDPRoute
 }
 
+// RawServer 是专属于一个协议的入口端口：网关不做识别，全部连接转给 Upstream
+type RawServer struct {
+	Name     string // 路由名，即协议名
+	Port     int
+	Network  string // tcp | udp
+	Upstream string
+}
+
 // Backend 是由网关启动并监管的协议后端进程
 type Backend struct {
 	Name         string
@@ -106,6 +114,7 @@ type Spec struct {
 
 	TCPServers []TCPServer
 	UDPServers []UDPServer
+	RawServers []RawServer
 	Backends   []Backend
 	Sites      []Site
 }
@@ -195,6 +204,17 @@ func gatewayApp(s Spec) obj {
 			server["fallback"] = obj{"name": "site_h3", "tls": "passthrough", "upstream": s.SiteAddr}
 		}
 		servers[fmt.Sprintf("udp_%d", srv.Port)] = server
+	}
+	for _, srv := range s.RawServers {
+		listen := fmt.Sprintf(":%d", srv.Port)
+		if srv.Network == "udp" {
+			listen = "udp/" + listen
+		}
+		servers[fmt.Sprintf("raw_%s_%d", srv.Network, srv.Port)] = obj{
+			"listen":   []string{listen},
+			"raw":      true,
+			"fallback": obj{"name": srv.Name, "tls": "passthrough", "upstream": srv.Upstream},
+		}
 	}
 	app := obj{"servers": servers}
 	if len(s.Backends) > 0 {

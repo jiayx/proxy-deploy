@@ -197,3 +197,22 @@ func waitFor(t *testing.T, cond func() bool) {
 	}
 	t.Fatal("condition not met")
 }
+
+// 专用端口：首包像 TLS 记录头（声称后面还有 16KB）的随机字节也必须立即转发，不能等待识别
+func TestRawServerForwardsWithoutInspection(t *testing.T) {
+	fallback := &Route{Name: "ss2022", TLS: TLSPassthrough, Upstream: echoServer(t)}
+	addr := startGateway(t, &Server{Fallback: fallback, Raw: true}, selfSigned(t, "unused"))
+
+	c, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	msg := []byte{0x16, 0x03, 0x01, 0x40, 0x00, 0xde, 0xad, 0xbe, 0xef}
+	c.Write(msg)
+	c.SetReadDeadline(time.Now().Add(time.Second)) // 小于握手超时（2 秒）
+	buf := make([]byte, len(msg))
+	if _, err := io.ReadFull(c, buf); err != nil || string(buf) != string(msg) {
+		t.Fatalf("raw server should forward immediately: %x %v", buf, err)
+	}
+}

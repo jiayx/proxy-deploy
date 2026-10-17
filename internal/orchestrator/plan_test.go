@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -199,7 +200,7 @@ func TestPlanExampleAllProtocols(t *testing.T) {
 	}
 }
 
-func TestPlanDirectListen(t *testing.T) {
+func TestPlanDedicatedPort(t *testing.T) {
 	ss := func(port int) config.ProtocolConfig {
 		return config.ProtocolConfig{Name: "ss2022", Enabled: true, Port: port, Config: map[string]any{"password": secrets.Key(16)}}
 	}
@@ -208,22 +209,24 @@ func TestPlanDirectListen(t *testing.T) {
 		t.Fatalf("unexpected conflicts: %+v", p.Conflicts)
 	}
 	svc := p.Services[1]
-	if !svc.Direct || svc.ViaEntry || svc.Network != "tcp+udp" || svc.Runtime.ListenAddr != ":8388" || svc.Runtime.Cert != nil {
-		t.Fatalf("ss2022 should listen directly on TCP+UDP 8388: %+v", svc)
+	if !svc.Dedicated || !svc.ViaEntry || svc.Network != "tcp+udp" || svc.Runtime.ListenAddr != "127.0.0.1:20006" || svc.Runtime.Cert != nil {
+		t.Fatalf("ss2022 should sit behind the gateway on a loopback port: %+v", svc)
 	}
-	var ports []string
+	var raws []string
+	for _, r := range p.Caddy.RawServers {
+		raws = append(raws, fmt.Sprintf("%s/%d→%s", r.Network, r.Port, r.Upstream))
+	}
+	if got := strings.Join(raws, ","); got != "tcp/8388→127.0.0.1:20006,udp/8388→127.0.0.1:20006" {
+		t.Fatalf("want raw gateway servers on TCP and UDP 8388, got %s", got)
+	}
+	var reserved []string
 	for _, port := range p.Ports {
-		if port.Addr == ":8388" {
-			ports = append(ports, port.Network)
+		if strings.HasSuffix(port.Addr, ":8388") || strings.HasSuffix(port.Addr, ":20006") {
+			reserved = append(reserved, port.Network+port.Addr)
 		}
 	}
-	if strings.Join(ports, ",") != "tcp,udp" {
-		t.Fatalf("direct protocol should reserve both TCP and UDP, got %v", ports)
-	}
-	for _, r := range p.Caddy.TCPServers[0].Routes {
-		if r.Name == "ss2022" {
-			t.Fatal("direct protocol must not get a gateway route")
-		}
+	if got := strings.Join(reserved, ","); got != "tcp127.0.0.1:20006,tcp:8388,udp127.0.0.1:20006,udp:8388" {
+		t.Fatalf("unexpected reserved ports %s", got)
 	}
 
 	for port, want := range map[int]string{0: "单独的端口", 443: "网关", 80: "HTTP 入口"} {

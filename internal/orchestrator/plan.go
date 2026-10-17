@@ -54,7 +54,7 @@ type Service struct {
 	Network     string // tcp | udp
 	PublicPort  int
 	ViaEntry    bool // 流量经过网关转发
-	Direct      bool // 直接监听公网端口（没有 TLS，网关无法分流）
+	Dedicated   bool // 独占公网端口（没有 SNI，网关不识别直接转发）
 	Passthrough bool // 网关不终结 TLS，原样转发（协议自己处理 TLS）
 	Runtime     protocol.Runtime
 }
@@ -153,7 +153,7 @@ func (o *Orchestrator) Plan() *Plan {
 	tcpServer(c.Entry.HTTPSPort) // 主入口总是存在，承载网站
 
 	sniOwner := map[string]string{}
-	var direct []*Service
+	var dedicated []*Service
 	udpByPort := map[int][]*Service{}
 	var udpOrder []int
 
@@ -173,14 +173,14 @@ func (o *Orchestrator) Plan() *Plan {
 				continue
 			}
 		}
-		if d, ok := a.(protocol.DirectListener); ok && d.ListenDirect() {
+		if d, ok := a.(protocol.DedicatedPort); ok && d.NeedsDedicatedPort() {
 			if pc.Port == 0 {
 				conflict(pc.Name, "没有 TLS，网关无法按 SNI 分流，需要单独的端口", "设置 port，例如 8388")
 				continue
 			}
-			svc := &Service{Cfg: pc, Adapter: a, PublicPort: pc.Port, Network: a.Transport().String(), Direct: true}
-			svc.Runtime.ListenAddr = fmt.Sprintf(":%d", pc.Port)
-			direct = append(direct, svc)
+			svc := &Service{Cfg: pc, Adapter: a, PublicPort: pc.Port, Network: a.Transport().String(), Dedicated: true, ViaEntry: true}
+			svc.Runtime.ListenAddr = loopbackAddr(a)
+			dedicated = append(dedicated, svc)
 			p.Services = append(p.Services, svc)
 			continue
 		}
@@ -262,7 +262,7 @@ func (o *Orchestrator) Plan() *Plan {
 		udpServers = append(udpServers, srv)
 	}
 
-	// 直接监听的协议独占端口，不能与入口和其他协议共用
+	// 独占端口的协议不能与入口和其他协议共用端口；网关在这些端口上不做识别，直接转给它们
 	used := map[Port]string{{"tcp", fmt.Sprint(c.Entry.HTTPPort)}: "HTTP 入口"}
 	for _, port := range tcpOrder {
 		used[Port{"tcp", fmt.Sprint(port)}] = "TCP 网关"
@@ -270,7 +270,8 @@ func (o *Orchestrator) Plan() *Plan {
 	for _, srv := range udpServers {
 		used[Port{"udp", fmt.Sprint(srv.Port)}] = "UDP 网关"
 	}
-	for _, svc := range direct {
+	var rawServers []caddy.RawServer
+	for _, svc := range dedicated {
 		for _, network := range svc.networks() {
 			key := Port{network, fmt.Sprint(svc.PublicPort)}
 			if owner, ok := used[key]; ok {
@@ -278,6 +279,7 @@ func (o *Orchestrator) Plan() *Plan {
 				break
 			}
 			used[key] = svc.Cfg.Name
+			rawServers = append(rawServers, caddy.RawServer{Name: svc.Cfg.Name, Port: svc.PublicPort, Network: network, Upstream: svc.Runtime.ListenAddr})
 		}
 	}
 
@@ -313,6 +315,7 @@ func (o *Orchestrator) Plan() *Plan {
 		SitePlainAddr: sitePlainAddr,
 		TCPServers:    tcp,
 		UDPServers:    udpServers,
+		RawServers:    rawServers,
 		Sites:         sites,
 	}
 
@@ -327,6 +330,9 @@ func (o *Orchestrator) Plan() *Plan {
 	}
 	for _, s := range udpServers {
 		add("udp", fmt.Sprintf(":%d", s.Port))
+	}
+	for _, s := range rawServers {
+		add(s.Network, fmt.Sprintf(":%d", s.Port))
 	}
 	for _, svc := range p.Services {
 		for _, network := range svc.networks() {
@@ -356,12 +362,12 @@ func (o *Orchestrator) ClientConfigs(p *Plan) ([]*config.ClientConfig, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", s.Cfg.Name, err)
 		}
-		if s.Direct {
-			cc.Notes = append(cc.Notes, fmt.Sprintf("%s/%d，直接连接（不经网关）", strings.ToUpper(s.Network), s.PublicPort))
+		if s.Dedicated {
+			cc.Notes = append(cc.Notes, fmt.Sprintf("%s/%d（专用端口）", strings.ToUpper(s.Network), s.PublicPort))
 		} else {
 			cc.Notes = append(cc.Notes, fmt.Sprintf("%s/%d，SNI %s", strings.ToUpper(s.Network), s.PublicPort, s.SNI))
 		}
-		if insecure && !s.Direct && !s.Passthrough {
+		if insecure && !s.Dedicated && !s.Passthrough {
 			cc.Notes = append(cc.Notes, "证书由内部 CA 签发，客户端需要跳过证书校验")
 		}
 		out = append(out, cc)
