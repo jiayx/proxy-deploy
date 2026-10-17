@@ -101,6 +101,7 @@ type Site struct {
 type Spec struct {
 	AdminSocket string
 	StorageRoot string
+	UsageFile   string // 网关按用户累计的流量
 	Issuer      Issuer
 	CertNames   []string // 需要 Caddy 申请并维护的全部证书域名
 	DefaultSNI  string   // 客户端不带 SNI 时使用的证书
@@ -217,6 +218,9 @@ func gatewayApp(s Spec) obj {
 		}
 	}
 	app := obj{"servers": servers}
+	if s.UsageFile != "" {
+		app["usage_file"] = s.UsageFile
+	}
 	if len(s.Backends) > 0 {
 		backends := obj{}
 		for _, b := range s.Backends {

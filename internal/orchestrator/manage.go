@@ -69,6 +69,21 @@ type BackendStatus struct {
 	Tail     []string `json:"tail"`
 }
 
+// UserStats 是一个用户的统计，对应 gateway.UserSnapshot
+type UserStats struct {
+	User      string `json:"user"`
+	Active    int64  `json:"active"`
+	Total     int64  `json:"total"`
+	BytesUp   int64  `json:"bytes_up"`
+	BytesDown int64  `json:"bytes_down"`
+}
+
+// UserStats 读取网关按用户累计的统计
+func (o *Orchestrator) UserStats(ctx context.Context) ([]UserStats, error) {
+	var list []UserStats
+	return list, o.admin(ctx, http.MethodGet, "/proxy_gateway/users", &list)
+}
+
 // GatewayStats 读取网关各路由的统计
 func (o *Orchestrator) GatewayStats(ctx context.Context) ([]RouteStats, error) {
 	var stats []RouteStats

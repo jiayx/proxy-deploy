@@ -5,6 +5,7 @@ package orchestrator
 import (
 	"fmt"
 	"net"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -307,6 +308,7 @@ func (o *Orchestrator) Plan() *Plan {
 	p.Caddy = caddy.Spec{
 		AdminSocket:   o.layout.CaddyAdminSocket(),
 		StorageRoot:   o.layout.CaddyDataDir(),
+		UsageFile:     filepath.Join(o.layout.VarDir(), "usage.json"),
 		Issuer:        issuer,
 		CertNames:     certNames,
 		DefaultSNI:    c.Domain,

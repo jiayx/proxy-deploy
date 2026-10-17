@@ -69,6 +69,8 @@ type udpSession struct {
 	upstream *net.UDPConn
 	closed   bool
 	log      *zap.Logger
+	rec      *connRecord // 按用户统计的连接记录
+	recKey   connKey
 
 	key     string   // 当前客户端地址，在 table.sessions 中的键；由 table.mu 保护
 	cids    []string // 最近学到的连接 ID，最早的在前；由 table.mu 保护
@@ -392,6 +394,7 @@ func (t *udpTable) connect(sess *udpSession, route *Route) {
 	enableGRO(sess.upstream)
 	sess.route = route
 	sess.log = sess.log.With(zap.String("route", route.Name))
+	sess.rec, sess.recKey = trackConn(route.Name, "udp", sess.upstream.LocalAddr(), &sess.up, &sess.down)
 	route.stats.Active.Add(1)
 	route.stats.Total.Add(1)
 	for _, d := range sess.pending {
@@ -446,9 +449,11 @@ func (sess *udpSession) close(reason string) {
 		return
 	}
 	sess.upstream.Close()
+	untrackConn(sess.rec, sess.recKey)
 	sess.route.stats.Active.Add(-1)
 	sess.log.Info("connection closed",
 		zap.String("reason", reason),
+		zap.String("user", sess.rec.userName()),
 		zap.String("client", sess.client.Load().String()),
 		zap.String("upstream", sess.route.Upstream),
 		zap.String("upstream_local", sess.upstream.LocalAddr().String()),

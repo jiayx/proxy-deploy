@@ -238,6 +238,7 @@ func (p *process) terminate(cmd *exec.Cmd, exited <-chan error) {
 
 // pipeLogs 把进程输出按行写入日志，并保留最后几行供管理接口查看
 func (p *process) pipeLogs(r io.Reader) {
+	acc := logAccounting{backend: p.name, ports: map[string]int{}}
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64*1024), 1024*1024)
 	for sc.Scan() {
@@ -251,6 +252,7 @@ func (p *process) pipeLogs(r io.Reader) {
 		if ce := p.logger.Check(lineLevel(line), line); ce != nil {
 			ce.Write()
 		}
+		acc.line(line)
 	}
 }
 

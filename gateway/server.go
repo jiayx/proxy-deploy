@@ -99,12 +99,15 @@ func (s *Server) handle(conn net.Conn) {
 	st.Active.Add(1)
 	st.Total.Add(1)
 	var up, down atomic.Int64
+	rec, key := trackConn(route.Name, "tcp", upstream.LocalAddr(), &up, &down)
 	relay(client, upstream, []*atomic.Int64{&up, &st.BytesUp}, []*atomic.Int64{&down, &st.BytesDown})
+	untrackConn(rec, key)
 	st.Active.Add(-1)
 
 	// 后端本地地址对应 sing-box 日志里的 "inbound connection from 127.0.0.1:<端口>"，
 	// 用它可以把客户端真实地址和后端看到的连接对应起来
 	log.Info("connection closed",
+		zap.String("user", rec.userName()),
 		zap.String("upstream", route.Upstream),
 		zap.String("upstream_local", upstream.LocalAddr().String()),
 		zap.Int64("bytes_up", up.Load()),

@@ -116,6 +116,17 @@ func run(ctx context.Context, cmd string, rest []string, layout *paths.Layout,
 			}
 			fmt.Printf("  %s %-40s 到期 %s（%s）\n", mark, c.Name, c.NotAfter.Local().Format("2006-01-02 15:04"), remaining(time.Until(c.NotAfter)))
 		}
+		fmt.Println("用户:")
+		if list, err := orch.UserStats(ctx); err != nil {
+			fmt.Printf("  ✗ 读取统计失败：%v\n", err)
+		} else if len(list) == 0 {
+			fmt.Println("  （还没有用户产生流量）")
+		} else {
+			for _, u := range list {
+				fmt.Printf("  %-14s 活动 %-4d 累计 %-8d ↑ %-10s ↓ %-10s 合计 %s\n", u.User, u.Active, u.Total,
+					humanBytes(u.BytesUp), humanBytes(u.BytesDown), humanBytes(u.BytesUp+u.BytesDown))
+			}
+		}
 		fmt.Println("网关:")
 		if stats, err := orch.GatewayStats(ctx); err != nil {
 			fmt.Printf("  ✗ 读取统计失败：%v\n", err)

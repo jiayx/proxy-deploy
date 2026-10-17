@@ -26,6 +26,8 @@ type App struct {
 	Servers map[string]*Server `json:"servers,omitempty"`
 	// Backends 是由网关启动并监管的协议后端进程，按名称索引
 	Backends map[string]*Backend `json:"backends,omitempty"`
+	// UsageFile 保存按用户累计的流量，Caddy 重启后接着累计；为空时不持久化
+	UsageFile string `json:"usage_file,omitempty"`
 
 	// TLSConnectionPolicies 用于终结 TLS 的路由；为空时使用默认策略（按 SNI 取 Caddy 管理的证书）
 	TLSConnectionPolicies caddytls.ConnectionPolicies `json:"tls_connection_policies,omitempty"`
@@ -159,6 +161,7 @@ func (a *App) Provision(ctx caddy.Context) error {
 }
 
 func (a *App) Start() error {
+	setUsageFile(a.UsageFile, a.logger)
 	// 先启动后端，监听开始后转发过来的连接才有去处
 	names := make([]string, 0, len(a.Backends))
 	for name := range a.Backends {
@@ -214,6 +217,9 @@ func (a *App) Stop() error {
 		releaseBackend(p)
 	}
 	a.procs = nil
+	if err := saveUsage(); err != nil {
+		a.logger.Warn("save usage", zap.Error(err))
+	}
 	return nil
 }
 
