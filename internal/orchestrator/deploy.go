@@ -34,7 +34,7 @@ func (o *Orchestrator) Deploy(ctx context.Context, p *Plan, caddyBinary string, 
 		return err
 	}
 
-	logf("安装 Caddy (layer4)")
+	logf("安装 Caddy（网关）")
 	if err := caddy.Install(ctx, o.layout, caddyBinary); err != nil {
 		return err
 	}

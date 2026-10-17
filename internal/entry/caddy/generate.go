@@ -1,9 +1,8 @@
-// Package caddy 生成 Caddy（含 caddy-l4 插件）的 JSON 配置，并负责安装二进制。
+// Package caddy 生成 Caddy（含本仓库的 proxy_gateway 网关）的 JSON 配置，并负责安装二进制。
 //
 // 入口职责：
-//   - TCP 端口  l4 按 TLS SNI 分流：协议后端由 Caddy 用统一证书终结 TLS 后转发，
-//     其余流量原样交给内部 HTTPS 网站
-//   - UDP 端口  多个 QUIC 协议共享端口时，l4 按 QUIC SNI 分流
+//   - TCP 端口  网关按 TLS SNI 分流：协议后端由网关用统一证书终结 TLS 后转发，
+//     其余流量原样交给内部 HTTPS 网站（附 PROXY protocol）
 //   - HTTP 端口 跳转到 HTTPS，同时承担 ACME HTTP-01 验证
 //   - 证书由 Caddy 统一申请、续期，存放在安装目录下
 package caddy
@@ -44,8 +43,9 @@ func CertPaths(storageRoot string, iss Issuer, name string) (crt, key string) {
 	return dir + "/" + name + ".crt", dir + "/" + name + ".key"
 }
 
-// TCPRoute 是 TCP 入口上的一条 SNI 路由。Caddy 用统一证书终结 TLS 后把明文转发到 Upstream
+// TCPRoute 是 TCP 入口上的一条 SNI 路由。网关用统一证书终结 TLS 后把明文转发到 Upstream
 type TCPRoute struct {
+	Name     string // 路由名，用于网关日志和统计，即协议名
 	SNI      string
 	Upstream string
 }
@@ -54,18 +54,6 @@ type TCPRoute struct {
 type TCPServer struct {
 	Port   int
 	Routes []TCPRoute
-}
-
-// UDPRoute 是共享 UDP 端口上的一条 QUIC SNI 路由
-type UDPRoute struct {
-	SNI      string
-	Upstream string
-}
-
-// UDPServer 是一个由多个 QUIC 协议共享的 UDP 端口
-type UDPServer struct {
-	Port   int
-	Routes []UDPRoute
 }
 
 // Site 是一个网站：静态目录或反向代理
@@ -91,7 +79,6 @@ type Spec struct {
 	SitePlainAddr string
 
 	TCPServers []TCPServer
-	UDPServers []UDPServer
 	Sites      []Site
 }
 
@@ -100,9 +87,9 @@ type obj = map[string]any
 // Generate 生成缩进格式的 Caddy JSON 配置
 func Generate(s Spec) ([]byte, error) {
 	apps := obj{
-		"tls":    tlsApp(s),
-		"layer4": layer4App(s),
-		"http":   httpApp(s),
+		"tls":           tlsApp(s),
+		"proxy_gateway": gatewayApp(s),
+		"http":          httpApp(s),
 	}
 	if s.Issuer.Kind == "internal" {
 		// 不尝试把内部根证书装进系统信任库（需要 root，也不是部署工具该有的副作用）
@@ -150,45 +137,21 @@ func tlsApp(s Spec) obj {
 	}
 }
 
-func layer4App(s Spec) obj {
+func gatewayApp(s Spec) obj {
 	servers := obj{}
-
 	for _, srv := range s.TCPServers {
-		var routes []obj
+		routes := []obj{}
 		for _, r := range srv.Routes {
-			routes = append(routes, obj{
-				"match": []obj{{"tls": obj{"sni": []string{r.SNI}}}},
-				"handle": []obj{
-					{"handler": "tls"},
-					{"handler": "proxy", "upstreams": []obj{{"dial": []string{r.Upstream}}}},
-				},
-			})
+			routes = append(routes, obj{"name": r.Name, "sni": []string{r.SNI}, "tls": "terminate", "upstream": r.Upstream})
 		}
-		// 其余流量（网站、未知 SNI、ACME TLS-ALPN 验证）原样交给内部网站，
-		// 用 PROXY protocol 带上客户端真实地址
-		routes = append(routes, obj{
-			"handle": []obj{{"handler": "proxy", "proxy_protocol": "v2", "upstreams": []obj{{"dial": []string{s.SiteAddr}}}}},
-		})
 		servers[fmt.Sprintf("tcp_%d", srv.Port)] = obj{
 			"listen": []string{fmt.Sprintf(":%d", srv.Port)},
 			"routes": routes,
+			// 其余流量（网站、未知 SNI、非 TLS、ACME TLS-ALPN 验证）原样交给内部网站，
+			// 用 PROXY protocol 带上客户端真实地址
+			"fallback": obj{"name": "site", "tls": "passthrough", "upstream": s.SiteAddr, "proxy_protocol": true},
 		}
 	}
-
-	for _, srv := range s.UDPServers {
-		var routes []obj
-		for _, r := range srv.Routes {
-			routes = append(routes, obj{
-				"match":  []obj{{"quic": obj{"sni": []string{r.SNI}}}},
-				"handle": []obj{{"handler": "proxy", "upstreams": []obj{{"dial": []string{"udp/" + r.Upstream}}}}},
-			})
-		}
-		servers[fmt.Sprintf("udp_%d", srv.Port)] = obj{
-			"listen": []string{fmt.Sprintf("udp/:%d", srv.Port)},
-			"routes": routes,
-		}
-	}
-
 	return obj{"servers": servers}
 }
 
@@ -225,7 +188,7 @@ func httpApp(s Spec) obj {
 			"listen":          []string{s.SiteAddr},
 			"protocols":       []string{"h1", "h2"},
 			"automatic_https": obj{"disable": true},
-			// 先解析 l4 入口加上的 PROXY protocol 头再做 TLS，网站和反代后端看到的是客户端真实地址
+			// 先解析网关加上的 PROXY protocol 头再做 TLS，网站和反代后端看到的是客户端真实地址
 			"listener_wrappers": []obj{
 				{"wrapper": "proxy_protocol", "allow": []string{"127.0.0.1/32"}},
 				{"wrapper": "tls"},

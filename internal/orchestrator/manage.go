@@ -3,8 +3,12 @@ package orchestrator
 import (
 	"context"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -41,6 +45,40 @@ func (o *Orchestrator) Status(ctx context.Context) ([]UnitStatus, []CertStatus, 
 		certs = append(certs, cs)
 	}
 	return units, certs, nil
+}
+
+// RouteStats 是网关上一条路由的统计，对应 gateway.RouteSnapshot
+type RouteStats struct {
+	Route     string `json:"route"`
+	Active    int64  `json:"active"`
+	Total     int64  `json:"total"`
+	BytesUp   int64  `json:"bytes_up"`
+	BytesDown int64  `json:"bytes_down"`
+}
+
+// GatewayStats 通过 Caddy 管理接口（unix socket）读取网关各路由的统计
+func (o *Orchestrator) GatewayStats(ctx context.Context) ([]RouteStats, error) {
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "unix", o.layout.CaddyAdminSocket())
+		}},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost/proxy_gateway/stats", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var stats []RouteStats
+	return stats, json.NewDecoder(resp.Body).Decode(&stats)
 }
 
 func certNotAfter(path string) (time.Time, error) {

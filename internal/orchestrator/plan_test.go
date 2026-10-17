@@ -49,11 +49,8 @@ func TestPlanDefault(t *testing.T) {
 		t.Fatalf("want one TCP server on 443, got %+v", p.Caddy.TCPServers)
 	}
 	routes := p.Caddy.TCPServers[0].Routes
-	if len(routes) != 1 || routes[0].SNI != "anytls.example.com" || routes[0].Upstream != "127.0.0.1:20002" {
+	if len(routes) != 1 || routes[0].Name != "anytls" || routes[0].SNI != "anytls.example.com" || routes[0].Upstream != "127.0.0.1:20002" {
 		t.Fatalf("unexpected anytls route: %+v", routes)
-	}
-	if len(p.Caddy.UDPServers) != 0 {
-		t.Fatalf("single UDP protocol should listen directly, got %+v", p.Caddy.UDPServers)
 	}
 
 	byName := map[string]*Service{}
@@ -105,6 +102,27 @@ func TestPlanConflicts(t *testing.T) {
 				t.Fatalf("want one conflict containing %q, got %+v", c.want, p.Conflicts)
 			}
 		})
+	}
+}
+
+// fakeUDP 是测试用的第二个 UDP 协议
+type fakeUDP struct{ protocol.Adapter }
+
+func (fakeUDP) Name() string                  { return "tuic" }
+func (fakeUDP) Transport() protocol.Transport { return protocol.TransportUDP }
+
+func TestPlanSharedUDPPortNotSupportedYet(t *testing.T) {
+	cfg := baseConfig(proto("hysteria2"), proto("tuic"))
+	o := newOrch(t, cfg)
+	o.registry.Register(fakeUDP{})
+	p := o.Plan()
+	if len(p.Conflicts) != 1 || !strings.Contains(p.Conflicts[0].Reason, "UDP/443") {
+		t.Fatalf("want shared UDP port conflict, got %+v", p.Conflicts)
+	}
+
+	cfg.Protocols[1].Port = 8443
+	if p := o.Plan(); len(p.Conflicts) != 0 {
+		t.Fatalf("separate UDP ports should be fine, got %+v", p.Conflicts)
 	}
 }
 

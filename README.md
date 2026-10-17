@@ -1,6 +1,6 @@
 # proxy-deploy
 
-`proxyd` 是一个面向 Linux / systemd 的代理服务部署编排 CLI。它把 Caddy（含 caddy-l4）、代理协议服务和网站组合成一套部署：根据 YAML 配置规划公网入口、管理证书、安装二进制、生成配置与 systemd unit，并提供状态、日志、重启和卸载命令。
+`proxyd` 是一个面向 Linux / systemd 的代理服务部署编排 CLI。它把 Caddy（含本仓库实现的入口网关 `proxy_gateway`）、代理协议服务和网站组合成一套部署：根据 YAML 配置规划公网入口、管理证书、安装二进制、生成配置与 systemd unit，并提供状态、日志、重启和卸载命令。
 
 当前支持 **AnyTLS（TCP）** 和 **Hysteria2（QUIC / UDP）**，服务端均由 sing-box 提供；网站支持静态文件和反向代理。支持系统级部署和 `--user` 用户级部署。
 
@@ -9,7 +9,7 @@
 默认示例同时启用两个协议，入口如下：
 
 ```text
-公网 TCP/443 → Caddy l4 按 TLS SNI 分流
+公网 TCP/443 → 网关（proxy_gateway）按 TLS SNI 分流
                ├─ anytls.example.com → Caddy 终结客户端 TLS
                │                      → TLS 连接本机 AnyTLS 后端
                └─ 其他 SNI / 网站流量 → 内部 HTTPS 网站（127.0.0.1:20000）
@@ -21,7 +21,8 @@
 ```
 
 - TCP 和 UDP 可以使用相同的端口号。TCP 协议通过不同 SNI 与网站共享入口，后端只监听回环地址；Caddy 用统一管理的证书终结客户端 TLS，再把明文转发到回环地址上的协议后端（例如 AnyTLS 的 sing-box inbound）。
-- 单个 UDP 协议独占某个端口时直接监听公网；规划器也已实现多个 QUIC 协议共享 UDP 端口时按 QUIC SNI 转发到回环后端的逻辑。目前注册的 UDP 协议只有 Hysteria2，尚未接入 TUIC 等其他协议。
+- UDP 协议直接监听公网端口。多个 QUIC 协议共享同一个 UDP 端口需要网关按 QUIC SNI 分流，尚未实现，规划时会报冲突；见 [设计文档](docs/design.md)。
+- 网关为每个连接记录一条日志（客户端地址、SNI、路由、后端本地地址、字节数、时长），`status` 显示每条路由的活动连接、累计连接和流量。网关重载配置时不会断开已建立的连接。
 - 内部网站以 HTTPS 监听 `127.0.0.1:20000`（供 TCP 入口转发，支持 HTTP/1.1 和 HTTP/2；入口通过 PROXY protocol 传递客户端地址，网站访问日志和反代后端的 `X-Forwarded-For` 都是真实 IP），同时以明文 HTTP 监听 `127.0.0.1:20001`（供协议伪装反代，保留原始 Host）；协议回环后端从 `20002` 起分配。
 - 经 Caddy 转发的 TCP 协议（如 AnyTLS）在 sing-box 日志中的来源地址是 `127.0.0.1`：sing-box 自 1.6 起不再支持 PROXY protocol，无法从入口获得客户端地址。直接监听公网端口的协议（如 Hysteria2）能看到真实 IP。
 - Caddy 统一管理主域名、启用协议的 SNI 和网站 `host` 的证书。Hysteria2 启动前会等待证书文件就绪（最多 3 分钟），续期后 sing-box 自动重新加载证书文件，无需重启服务；AnyTLS 的客户端 TLS 在 Caddy 终结，无需读取证书文件。
@@ -119,7 +120,7 @@ web:
 | `acme` | 自定义 ACME 服务，必须填写 `email` 和 `ca`（ACME directory URL） |
 | `internal` | 使用 Caddy 内部 CA，适合测试，无需 `email`；不会自动安装根证书到系统信任库，生成的客户端 URI 带 `insecure=1` |
 
-ACME 配置还支持 `dns_provider` 和 `dns_config`，分别指定 Caddy DNS provider 名称及其配置字段。使用 DNS 验证时，需自行提供同时包含 caddy-l4 和对应 DNS provider 模块的 Caddy 二进制，再通过 `--caddy-binary` 部署；默认 xcaddy 回退构建只加入 caddy-l4。
+ACME 配置还支持 `dns_provider` 和 `dns_config`，分别指定 Caddy DNS provider 名称及其配置字段。使用 DNS 验证时，需在 `cmd/caddy/main.go` 中加入对应 DNS provider 模块的 import 后自行构建，再通过 `--caddy-binary` 部署；预构建的 Caddy 不含 DNS provider。
 
 ### 网站
 
@@ -158,7 +159,7 @@ web:
 | `-c <路径>` | 配置路径，默认 `deploy.yaml` |
 | `--prefix <目录>` | 安装目录，系统模式默认 `/opt/proxy-deploy`，用户模式默认 `~/.local/proxy-deploy`；建议使用独立的绝对路径 |
 | `--user` | 使用 `systemctl --user` 和用户级 unit 目录 |
-| `--caddy-binary <路径>` | `deploy` 时复制并使用本地 Caddy 二进制，必须含所需 l4 模块 |
+| `--caddy-binary <路径>` | `deploy` 时复制并使用本地 Caddy 二进制，必须包含 `proxy_gateway` 模块（`go build ./cmd/caddy` 构建） |
 | `--show-caddy` | `plan` 时额外输出生成的 Caddy JSON |
 | `-n <行数>` / `-f` | 日志行数（默认 50）/ 持续跟随日志 |
 
@@ -190,12 +191,11 @@ sudo ./proxyd uninstall
 
 ## 程序安装与文件布局
 
-Caddy 的安装来源按以下优先级选择，并在安装后检查 TLS / QUIC 匹配和 TLS / proxy 处理模块：
+部署使用的 Caddy 由本仓库的 `cmd/caddy` 构建：官方标准模块加上 `gateway/` 中的入口网关，Caddy 及依赖版本由 `go.mod` 固定，`go build ./cmd/caddy` 即可构建。安装来源按以下优先级选择，并在安装后检查网关模块：
 
 1. `--caddy-binary` 指定的本地文件。
-2. 安装目录中已有的 `bin/caddy`。
-3. 本项目 GitHub Releases 中 `caddy` release 的 `caddy-l4-<os>-<arch>` 预构建文件，用同时发布的 `.sha256` 文件校验。该 release 由 `.github/workflows/caddy.yml` 构建 linux amd64 / arm64，每月自动重建；也可手动触发并指定 Caddy 版本或额外插件（例如 DNS provider）。已安装的 `bin/caddy` 不会被自动替换。
-4. 下载失败时使用本机 `xcaddy build --with github.com/mholt/caddy-l4` 构建，需预先安装 xcaddy 和可用的 Go 工具链。
+2. 安装目录中已有的 `bin/caddy`，且包含所需模块。
+3. 本项目 GitHub Releases 中 `caddy` release 的 `caddy-gateway-<os>-<arch>` 预构建文件，用同时发布的 `.sha256` 文件校验；缺少模块的旧版本也会被替换。该 release 由 `.github/workflows/caddy.yml` 在网关代码或依赖变化时构建 linux amd64 / arm64。
 
 协议程序从各自上游 GitHub Releases 下载，版本和各平台的 sha256 固定在适配器源码中（当前 sing-box `1.14.3`，支持 linux amd64 / arm64），校验不通过不会写入文件。所有协议都使用 sing-box 作为服务端：共用一份二进制，每个协议运行独立的进程和 unit，修改或重启某个协议不影响其他协议的连接。程序按版本保存并通过符号链接使用；重复部署会复用已存在的版本，部署成功后清理 `bin/` 中不再使用的程序和版本；更新配置不会自动追踪上游最新版本。部署主机需能访问相应下载地址。
 
@@ -224,9 +224,12 @@ systemd unit 在安装目录之外：系统模式写入 `/etc/systemd/system/`�
 
 ```text
 cmd/proxyd/                CLI 命令、选项和输出
+cmd/caddy/                 部署用的 Caddy 入口（标准模块 + 网关）
+gateway/                   入口网关 proxy_gateway（Caddy 应用模块）：SNI 路由、TLS 终结与透传、统计和管理接口
+docs/design.md             设计目标、架构和实现计划
 internal/config/           YAML 类型、默认值、基础校验和示例
 internal/orchestrator/     入口规划、冲突检查、部署、清单和 systemd 管理
-internal/entry/caddy/      Caddy 安装、模块检查和 JSON 配置生成
+internal/entry/caddy/      Caddy 安装、模块检查和 JSON 配置生成（含网关配置）
 internal/protocol/         协议接口、注册表及 anytls / hysteria2 适配器；singbox/ 为共用的 sing-box 安装与配置
 pkg/paths/                 安装前缀和系统 / 用户模式路径
 pkg/system/                下载、解压、版本安装、文件写入和 systemctl 封装

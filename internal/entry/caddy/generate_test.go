@@ -28,8 +28,7 @@ func TestGenerate(t *testing.T) {
 		HTTPPort:      8080,
 		SiteAddr:      "127.0.0.1:20000",
 		SitePlainAddr: "127.0.0.1:20001",
-		TCPServers:    []TCPServer{{Port: 8443, Routes: []TCPRoute{{SNI: "t.a.com", Upstream: "127.0.0.1:20001"}}}},
-		UDPServers:    []UDPServer{{Port: 8443, Routes: []UDPRoute{{SNI: "u.a.com", Upstream: "127.0.0.1:20002"}}}},
+		TCPServers:    []TCPServer{{Port: 8443, Routes: []TCPRoute{{Name: "anytls", SNI: "t.a.com", Upstream: "127.0.0.1:20002"}}}},
 		Sites:         []Site{{Root: "/www"}, {Host: "app.a.com", Upstream: "127.0.0.1:3000"}},
 	})
 	if err != nil {
@@ -43,11 +42,9 @@ func TestGenerate(t *testing.T) {
 	for _, want := range []string{
 		`"listen": "unix//v/admin.sock"`,
 		`"install_trust": false`,
-		`"udp/127.0.0.1:20002"`,
-		`"udp/:8443"`,
 		`https://{http.request.host}:8443{http.request.uri}`,
 		`"fallback_sni": "a.com"`,
-		`"proxy_protocol": "v2"`,
+		`"proxy_protocol": true`,
 		`"wrapper": "proxy_protocol"`,
 	} {
 		if !strings.Contains(s, want) {
@@ -61,9 +58,13 @@ func TestGenerate(t *testing.T) {
 		t.Fatalf("host-matched site should precede fallback: %v", routes)
 	}
 
-	// TCP 入口最后一条路由是不带 match 的网站兜底
-	tcp := cfg["apps"].(map[string]any)["layer4"].(map[string]any)["servers"].(map[string]any)["tcp_8443"].(map[string]any)["routes"].([]any)
-	if last := tcp[len(tcp)-1].(map[string]any); last["match"] != nil {
-		t.Fatalf("last TCP route should be the site fallback: %v", last)
+	// 网关：协议路由终结 TLS，其余流量透传给内部网站
+	gw := cfg["apps"].(map[string]any)["proxy_gateway"].(map[string]any)["servers"].(map[string]any)["tcp_8443"].(map[string]any)
+	route := gw["routes"].([]any)[0].(map[string]any)
+	if route["name"] != "anytls" || route["tls"] != "terminate" || route["upstream"] != "127.0.0.1:20002" {
+		t.Fatalf("unexpected gateway route: %v", route)
+	}
+	if fb := gw["fallback"].(map[string]any); fb["tls"] != "passthrough" || fb["upstream"] != "127.0.0.1:20000" {
+		t.Fatalf("unexpected gateway fallback: %v", fb)
 	}
 }
