@@ -1,0 +1,70 @@
+name: caddy
+
+# 构建部署所用的 Caddy（含 caddy-l4），发布到固定的 release tag `caddy`。
+# caddy.Install 从 releases/download/caddy/caddy-l4-<os>-<arch> 下载，并用同名 .sha256 文件校验。
+on:
+  workflow_dispatch:
+    inputs:
+      caddy_version:
+        description: Caddy 版本（如 v2.10.2），默认 latest
+        default: latest
+      extra_plugins:
+        description: 额外插件，空格分隔（如 github.com/caddy-dns/cloudflare）
+        default: ""
+  push:
+    branches: [main]
+    paths: [.github/workflows/caddy.yml]
+  schedule:
+    - cron: "0 3 1 * *" # 每月重建一次，跟进 Caddy 和 caddy-l4 的修复
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      CADDY_VERSION: ${{ inputs.caddy_version || 'latest' }}
+      EXTRA_PLUGINS: ${{ inputs.extra_plugins }}
+    steps:
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: Build
+        run: |
+          set -euo pipefail
+          go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+          with=(--with github.com/mholt/caddy-l4)
+          for p in $EXTRA_PLUGINS; do with+=(--with "$p"); done
+          mkdir dist
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch xcaddy build "$CADDY_VERSION" "${with[@]}" --output dist/caddy-l4-linux-$arch
+          done
+      - name: Verify modules
+        run: |
+          set -euo pipefail
+          mods=$(dist/caddy-l4-linux-amd64 list-modules)
+          for m in layer4.matchers.tls layer4.matchers.quic layer4.handlers.tls layer4.handlers.proxy; do
+            grep -qx "$m" <<<"$mods" || { echo "missing $m"; exit 1; }
+          done
+          {
+            echo "部署用 Caddy（含 caddy-l4），由 workflow 自动构建。"
+            echo
+            echo '```'
+            dist/caddy-l4-linux-amd64 version
+            dist/caddy-l4-linux-amd64 build-info | grep -E 'caddy-l4|caddy/v2 ' || true
+            echo '```'
+          } > notes.md
+          cd dist && for f in *; do sha256sum "$f" > "$f.sha256"; done
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if gh release view caddy >/dev/null 2>&1; then
+            gh release edit caddy --notes-file notes.md --latest=false
+            gh release upload caddy dist/* --clobber
+          else
+            gh release create caddy dist/* --title "Caddy with caddy-l4" --notes-file notes.md --latest=false
+          fi

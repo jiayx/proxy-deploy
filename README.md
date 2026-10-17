@@ -193,7 +193,7 @@ Caddy 的安装来源按以下优先级选择，并在安装后检查 TLS / QUIC
 
 1. `--caddy-binary` 指定的本地文件。
 2. 安装目录中已有的 `bin/caddy`。
-3. 本项目 GitHub Releases 的 `caddy-l4-<os>-<arch>` 预构建文件，用同时发布的 `.sha256` 文件校验（由 `.github/workflows/ci.yml` 在打 `v*` tag 时构建 linux amd64 / arm64）。
+3. 本项目 GitHub Releases 中 `caddy` release 的 `caddy-l4-<os>-<arch>` 预构建文件，用同时发布的 `.sha256` 文件校验。该 release 由 `.github/workflows/caddy.yml` 构建 linux amd64 / arm64，每月自动重建；也可手动触发并指定 Caddy 版本或额外插件（例如 DNS provider）。已安装的 `bin/caddy` 不会被自动替换。
 4. 下载失败时使用本机 `xcaddy build --with github.com/mholt/caddy-l4` 构建，需预先安装 xcaddy 和可用的 Go 工具链。
 
 协议程序从各自上游 GitHub Releases 下载，版本和各平台的 sha256 固定在适配器源码中（当前 AnyTLS `0.0.13`、Hysteria2 `app/v2.13.0`，支持 linux amd64 / arm64），校验不通过不会写入文件。程序按版本保存并通过符号链接使用；重复部署会复用已存在的版本，更新配置不会自动追踪上游最新版本。部署主机需能访问相应下载地址。

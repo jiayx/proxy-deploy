@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	// releaseBase 是预构建二进制（caddy-l4-{os}-{arch}）的下载地址前缀，由本项目 CI 发布
-	releaseBase = "https://github.com/jiayx/proxy-deploy/releases/latest/download"
+	// releaseBase 是预构建二进制（caddy-l4-{os}-{arch}）的下载地址前缀，由 .github/workflows/caddy.yml 发布
+	releaseBase = "https://github.com/jiayx/proxy-deploy/releases/download/caddy"
 	l4Plugin    = "github.com/mholt/caddy-l4"
 )
 
