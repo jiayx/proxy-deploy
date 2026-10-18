@@ -2,10 +2,12 @@ package orchestrator
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -105,15 +107,26 @@ func (o *Orchestrator) Backends(ctx context.Context) ([]BackendStatus, error) {
 
 // admin 调用网关的管理接口（Caddy admin API，unix socket），out 非空时解析 JSON 响应
 func (o *Orchestrator) admin(ctx context.Context, method, path string, out any) error {
+	return o.adminBody(ctx, method, path, nil, out)
+}
+
+func (o *Orchestrator) adminBody(ctx context.Context, method, path string, body []byte, out any) error {
 	client := &http.Client{
 		Timeout: 5 * time.Second,
 		Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, "unix", o.layout.GatewayAdminSocket())
 		}},
 	}
-	req, err := http.NewRequestWithContext(ctx, method, "http://localhost"+path, nil)
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, "http://localhost"+path, reader)
 	if err != nil {
 		return err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -146,11 +159,36 @@ func certNotAfter(path string) (time.Time, error) {
 	return cert.NotAfter, nil
 }
 
+// containerLogs 是容器部署的日志：整个服务的日志在容器的标准输出里；协议的最近输出从网关管理接口读取
+func (o *Orchestrator) containerLogs(ctx context.Context, m *Manifest, name string) error {
+	if name == "" {
+		return errors.New("容器部署的日志请用 docker logs 查看；proxy-gateway logs <协议> 可以查看某个协议最近的输出")
+	}
+	if !slices.Contains(m.Backends, name) {
+		return fmt.Errorf("未知协议 %q，可选：%s", name, strings.Join(m.Backends, ", "))
+	}
+	list, err := o.Backends(ctx)
+	if err != nil {
+		return err
+	}
+	for _, b := range list {
+		if b.Name == name {
+			for _, line := range b.Tail {
+				fmt.Println(line)
+			}
+		}
+	}
+	return nil
+}
+
 // Logs 输出日志：name 为空时输出整个服务的日志（含网关连接日志和全部后端输出），协议名只输出该协议后端进程的日志
 func (o *Orchestrator) Logs(ctx context.Context, name string, lines int, follow bool) error {
 	m, err := LoadManifest(o.layout)
 	if err != nil {
 		return err
+	}
+	if m.Container {
+		return o.containerLogs(ctx, m, name)
 	}
 	if name == "" || name == gatewayUnit {
 		cmd := exec.CommandContext(ctx, "journalctl", o.journalArgs(gatewayUnit, lines, follow)...)
@@ -238,6 +276,9 @@ func (o *Orchestrator) Restart(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
+	if name == "" && m.Container {
+		return errors.New("容器部署请用 docker restart 重启整个服务")
+	}
 	if name == "" || name == gatewayUnit {
 		if err := o.systemd.Restart(ctx, gatewayUnit); err != nil {
 			return o.withJournal(ctx, gatewayUnit, err)
@@ -260,6 +301,9 @@ func (o *Orchestrator) Uninstall(ctx context.Context, logf Logf) error {
 	m, err := LoadManifest(o.layout)
 	if err != nil {
 		return err
+	}
+	if m.Container {
+		return errors.New("容器部署请用 docker compose down 停止，删除数据卷即可清除证书和流量统计")
 	}
 	prefix := filepath.Clean(o.layout.Prefix)
 	home, _ := os.UserHomeDir()

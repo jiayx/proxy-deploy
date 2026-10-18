@@ -1,0 +1,5 @@
+/dist/
+/proxy-gateway
+*.test
+deploy.yaml
+.DS_Store

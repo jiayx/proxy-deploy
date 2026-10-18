@@ -30,6 +30,7 @@
 - **单一程序**：整个项目只有一个程序 `proxy-gateway`（`cmd/proxy-gateway`），导入官方 Caddy 标准模块和 `gateway`。部署和运维命令由 `internal/cli` 处理，其余命令（`run`、`reload`、`validate` 等）交给 Caddy。`deploy` 把正在执行的程序复制到安装目录，服务执行 `proxy-gateway run`，所以部署工具生成的配置和网关代码总是同一个版本。依赖版本由 `go.mod` 固定，用 `go build` 直接构建，不需要 xcaddy。
 - **协议后端**：sing-box，每个协议一个独立进程。改动或重启一个协议不影响其他协议；某个协议出问题也不会把网关和网站带挂。
 - **部署命令**：安装程序、根据 `deploy.yaml` 生成 Caddy 和 sing-box 配置、管理唯一的 systemd 服务 `proxy-gateway.service`。sing-box 进程由网关监管，运维命令（状态、日志、重启）通过网关的管理接口（Caddy admin API）完成。
+- **两种运行方式**：部署准备（安装协议程序、生成并校验配置）两种方式共用，只有“让网关加载配置”这一步不同。systemd 方式写入 unit 并启动或重载服务；容器方式由 `serve` 在同一进程里用 `caddy.Load` 启动网关，容器内执行 `deploy` 时把新配置 POST 到管理接口的 `/load` 热加载。安装清单记录运行方式，`logs`、`restart`、`uninstall` 据此选择 journalctl / systemctl 或提示使用 Docker 命令。
 
 ## 网关配置（JSON）
 

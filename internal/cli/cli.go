@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/jiayx/proxy-gateway/internal/config"
@@ -23,7 +24,9 @@ const usage = `用法: proxy-gateway [选项] <命令>
 命令:
   init-config      输出示例 deploy.yaml
   plan             检查配置，显示入口规划（不做任何变更）
-  deploy           安装并启动全部服务（可重复执行以更新）
+  deploy           安装并启动全部服务（可重复执行以更新）；在容器里执行时重载配置
+  serve            容器方式运行：生成配置并在前台运行网关（镜像的默认命令）
+  fetch            下载协议程序（构建镜像时使用）
   client-config [用户]  输出客户端连接 URI（默认全部用户）
   status           查看服务状态和证书有效期
   version          查看版本，检查是否有新版本
@@ -40,7 +43,11 @@ run、reload、validate 等其余命令是 Caddy 自带的命令，由服务内�
 var commands = map[string]bool{
 	"init-config": true, "plan": true, "deploy": true, "client-config": true, "status": true,
 	"version": true, "logs": true, "restart": true, "uninstall": true, "help": true,
+	"serve": true, "fetch": true,
 }
+
+// inContainer 表示运行在本项目的容器镜像里（镜像设置了 PROXY_GATEWAY_CONTAINER=1）
+func inContainer() bool { return os.Getenv("PROXY_GATEWAY_CONTAINER") == "1" }
 
 // Handles 判断命令行是否由本包处理：没有参数、以选项开头或是本包的命令
 func Handles(args []string) bool {
@@ -76,7 +83,7 @@ func Main(argv []string) {
 		}
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	layout := paths.New(*prefix, *user)
@@ -95,6 +102,8 @@ func run(ctx context.Context, cmd string, rest []string, layout *paths.Layout,
 	case "init-config":
 		fmt.Print(config.Example())
 		return nil
+	case "fetch":
+		return orchestrator.New(builtin.Registry(layout), nil, layout).FetchPrograms(ctx, logf)
 
 	// 以下命令只依赖安装清单，不需要配置文件
 	case "status":
@@ -104,6 +113,9 @@ func run(ctx context.Context, cmd string, rest []string, layout *paths.Layout,
 			return err
 		}
 		fmt.Println("服务:")
+		if len(units) == 0 {
+			fmt.Println("  容器部署（网关在容器里运行，由 Docker 管理）")
+		}
 		for _, u := range units {
 			mark := "✓"
 			if u.State != "active" {
@@ -205,10 +217,18 @@ func run(ctx context.Context, cmd string, rest []string, layout *paths.Layout,
 			return errors.New("规划存在冲突")
 		}
 		return nil
+	case "serve":
+		printPlan(plan)
+		fmt.Println()
+		return orch.Serve(ctx, plan, logf)
 	case "deploy":
 		printPlan(plan)
 		fmt.Println()
-		if err := orch.Deploy(ctx, plan, logf); err != nil {
+		deploy := orch.Deploy
+		if inContainer() {
+			deploy = orch.Apply
+		}
+		if err := deploy(ctx, plan, logf); err != nil {
 			return err
 		}
 		fmt.Println("\n部署完成。客户端配置:")
@@ -286,8 +306,10 @@ func printVersions(v *orchestrator.Versions) {
 		fmt.Printf("          ↑ 仓库 main 已更新到 %s，拉取后重新构建\n", short(v.Main))
 	}
 
-	// 已安装的程序：服务运行的就是它，deploy 时换成当前程序
+	// 已安装的程序：服务运行的就是它，deploy 时换成当前程序；容器里运行的就是镜像中的当前程序
 	switch {
+	case inContainer():
+		fmt.Println("运行方式  容器（升级请拉取新镜像）")
 	case v.InstalledErr != nil:
 		fmt.Println("已安装    未安装")
 	case v.InstalledSame:

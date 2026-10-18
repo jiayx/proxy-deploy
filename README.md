@@ -7,6 +7,11 @@
 
 `deploy` 把正在执行的程序复制到安装目录作为网关使用，所以部署工具和网关总是同一个版本。
 
+有两种运行方式，网关的功能完全相同：
+
+- **systemd**：`proxy-gateway deploy` 安装到 `/opt/proxy-gateway`，由 systemd 管理（也支持 `--user` 用户级部署）。
+- **容器**：镜像 `ghcr.io/jiayx/proxy-gateway`，用 Docker / compose 管理，适合服务器上其他服务也跑在 Docker 里的情况，见[容器部署](#容器部署)。
+
 当前支持 **AnyTLS**、**VLESS + Reality**（TCP，经网关）、**Hysteria2**、**TUIC v5**（QUIC，经网关）和 **Shadowsocks 2022**（TCP+UDP，经网关的专用端口），服务端均由 sing-box 提供；网站支持静态文件和反向代理。支持系统级部署和 `--user` 用户级部署。
 
 ## 工作方式
@@ -225,6 +230,43 @@ sudo ./proxy-gateway uninstall
 用户服务默认随登录会话启停：未开启 linger 时，用户注销后服务会被停止，开机后也不会自动启动。`deploy` 和 `status` 检测到这种情况会给出提示，需由管理员执行一次 `sudo loginctl enable-linger <用户名>`。
 
 高位端口下使用公网 ACME 证书时，仍需保证 CA 的验证流量能到达服务，或配置 DNS 验证。
+
+### 容器部署
+
+镜像 `ghcr.io/jiayx/proxy-gateway`（`edge` 跟随 main 分支，`v*` 为正式版本，支持 amd64 / arm64）包含程序和固定版本的 sing-box。容器启动时执行 `proxy-gateway serve`：读取 `/etc/proxy-gateway/deploy.yaml`，生成配置，在前台运行网关。
+
+```yaml
+# compose.yml
+services:
+  proxy-gateway:
+    image: ghcr.io/jiayx/proxy-gateway:edge
+    container_name: proxy-gateway
+    restart: unless-stopped
+    network_mode: host          # 直接监听宿主机端口：客户端真实地址、UDP 性能都与 systemd 部署相同
+    environment:
+      TZ: Asia/Shanghai         # 流量重置日按这个时区计算
+    volumes:
+      - ./config:/etc/proxy-gateway:ro   # 目录里放 deploy.yaml
+      - data:/opt/proxy-gateway/var      # 证书和用户流量统计
+volumes:
+  data:
+```
+
+```bash
+docker compose up -d                                        # 启动
+docker logs -f proxy-gateway                                # 日志（含网关连接日志和协议输出）
+docker exec proxy-gateway proxy-gateway status              # 状态、用户流量、证书
+docker exec proxy-gateway proxy-gateway client-config       # 客户端链接
+docker exec proxy-gateway proxy-gateway deploy              # 修改 deploy.yaml 后重载配置，连接不断
+docker exec proxy-gateway proxy-gateway restart anytls      # 只重启某个协议
+docker exec proxy-gateway proxy-gateway logs anytls         # 某个协议最近的输出
+docker compose pull && docker compose up -d                 # 升级镜像（会断开现有连接）
+```
+
+- 挂载 `deploy.yaml` 所在的目录，不要只挂载这一个文件：编辑器和 `sed -i` 保存时会换成新文件，单文件挂载仍指向旧文件，容器里看不到修改。
+- 使用 host 网络时，要反向代理其他容器里的网站，把那个容器的端口映射到本机回环地址（例如 `ports: ["127.0.0.1:8080:80"]`），在 `web` 中写 `upstream: 127.0.0.1:8080`。
+- 静态网站目录需要另外挂载进容器，`root` 写容器内的路径。
+- `restart`（不指定协议）和 `uninstall` 在容器里不可用，分别用 `docker restart` 和 `docker compose down`。
 
 ## 程序安装与文件布局
 

@@ -19,6 +19,8 @@ type Manifest struct {
 	Units    []string   `json:"units"`    // 写入 unit 目录的全部文件名
 	Ports    []Port     `json:"ports"`
 	Certs    []CertFile `json:"certs"`
+	// Container 表示网关运行在容器里（proxy-gateway serve），没有 systemd unit
+	Container bool `json:"container,omitempty"`
 }
 
 type CertFile struct {

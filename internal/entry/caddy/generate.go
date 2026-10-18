@@ -297,16 +297,15 @@ func httpApp(s Spec) obj {
 	if fallback != nil {
 		routes = append(routes, fallback)
 	}
+	// 不暴露 Server 头（Caddy 和反代后端都会加），避免一眼看出服务器软件
+	headers := obj{"delete": []string{"Server"}, "deferred": true}
 	protocols := []string{"h1", "h2"}
 	if siteHTTP3(s) {
 		protocols = append(protocols, "h3")
 		// Caddy 默认按内部监听端口通告 HTTP/3，改成对外的入口端口
-		altSvc := obj{"handle": []obj{{
-			"handler":  "headers",
-			"response": obj{"set": obj{"Alt-Svc": []string{fmt.Sprintf(`h3=":%d"; ma=86400`, s.HTTPSPort)}}},
-		}}}
-		routes = append([]obj{altSvc}, routes...)
+		headers["set"] = obj{"Alt-Svc": []string{fmt.Sprintf(`h3=":%d"; ma=86400`, s.HTTPSPort)}}
 	}
+	routes = append([]obj{{"handle": []obj{{"handler": "headers", "response": headers}}}}, routes...)
 
 	location := "https://{http.request.host}{http.request.uri}"
 	if s.HTTPSPort != 443 {
@@ -338,6 +337,9 @@ func httpApp(s Spec) obj {
 			"listen":          []string{fmt.Sprintf(":%d", s.HTTPPort)},
 			"automatic_https": obj{"disable": true},
 			"routes": []obj{{"handle": []obj{{
+				"handler":  "headers",
+				"response": obj{"delete": []string{"Server"}, "deferred": true},
+			}, {
 				"handler":     "static_response",
 				"status_code": 308,
 				"headers":     obj{"Location": []string{location}},

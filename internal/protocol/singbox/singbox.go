@@ -83,7 +83,7 @@ func LatestVersion(ctx context.Context) (string, error) {
 func Check(ctx context.Context, layout *paths.Layout, configPath string) error {
 	out, err := exec.CommandContext(ctx, Bin(layout), "check", "--disable-color", "-c", configPath).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("sing-box check %s: %s", configPath, strings.TrimSpace(string(out)))
+		return fmt.Errorf("sing-box check %s: %v: %s", configPath, err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
