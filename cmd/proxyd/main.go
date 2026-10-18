@@ -270,6 +270,9 @@ func printVersions(v *orchestrator.Versions) {
 		fmt.Println("Caddy     未安装")
 	} else {
 		fmt.Printf("Caddy     %s，网关 %s\n", v.Caddy.Caddy, short(*v.Caddy))
+		if v.LocalCaddy {
+			fmt.Println("          用 --caddy-binary 安装的本地构建，deploy 不会自动更新")
+		}
 	}
 	switch {
 	case v.ReleaseErr != nil:

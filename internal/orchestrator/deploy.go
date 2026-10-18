@@ -48,7 +48,9 @@ func (o *Orchestrator) Deploy(ctx context.Context, p *Plan, caddyBinary string, 
 	}
 
 	logf("安装 Caddy（网关）")
-	keepLocal := caddyBinary == "" && prev != nil && prev.LocalCaddy
+	// 之前用 --caddy-binary 安装的本地构建继续沿用；删掉它就换回发布版本
+	_, statErr := os.Stat(o.layout.CaddyBin())
+	keepLocal := caddyBinary == "" && prev != nil && prev.LocalCaddy && statErr == nil
 	caddyChanged, warning, err := caddy.Install(ctx, o.layout, caddyBinary, keepLocal)
 	if err != nil {
 		return err
@@ -118,10 +120,15 @@ func (o *Orchestrator) Deploy(ctx context.Context, p *Plan, caddyBinary string, 
 		return err
 	}
 
-	logf("启动 %s", caddyUnit)
 	start := o.systemd.ReloadOrRestart
-	if restartCaddy {
+	switch {
+	case o.systemd.ActiveState(ctx, caddyUnit) != "active":
+		logf("启动 %s", caddyUnit)
+	case restartCaddy:
+		logf("重启 %s（程序或 unit 有变化，现有连接会断开）", caddyUnit)
 		start = o.systemd.Restart
+	default:
+		logf("重载 %s 的配置（现有连接不受影响）", caddyUnit)
 	}
 	if err := start(ctx, caddyUnit); err != nil {
 		return o.withJournal(ctx, caddyUnit, err)

@@ -23,7 +23,7 @@ var requiredModules = []string{"proxy_gateway", "admin.api.proxy_gateway"}
 
 // Install 安装带 proxy_gateway 网关的 Caddy（本仓库 cmd/caddy）：
 //   - localBinary 非空：复制调用方提供的二进制
-//   - keepLocal：之前安装的是本地构建，沿用它，不换成发布版本
+//   - keepLocal：已安装的是之前的本地构建，沿用它，不换成发布版本
 //   - 否则使用本项目发布的最新预构建二进制：已安装的与之相同时不动，不同时下载替换；
 //     无法连接发布地址但已安装过时，沿用已安装的并在 warning 中说明
 //
@@ -37,7 +37,7 @@ func Install(ctx context.Context, layout *paths.Layout, localBinary string, keep
 		}
 		return true, "", verifyModules(ctx, dest)
 	}
-	if keepLocal && fileExists(dest) {
+	if keepLocal {
 		return false, fmt.Sprintf("Caddy 是之前用 --caddy-binary 安装的本地构建，不会自动更新；要换成发布版本，删除 %s 后重新部署", dest), verifyModules(ctx, dest)
 	}
 

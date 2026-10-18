@@ -24,6 +24,7 @@ type Versions struct {
 	CaddyErr, ReleaseErr     error
 	SingBox, SingBoxLatest   string // 已安装的、上游最新的正式版本
 	SingBoxErr, SingBoxUpErr error
+	LocalCaddy               bool // Caddy 是 --caddy-binary 安装的本地构建，deploy 不会自动更新
 }
 
 // SingBoxPinned 是 proxyd 安装的 sing-box 版本
@@ -35,6 +36,9 @@ func (o *Orchestrator) Versions(ctx context.Context) *Versions {
 	v.Proxyd, v.ProxydErr = selfBuild()
 	v.Main, v.MainErr = latestMain(ctx)
 	v.Caddy, v.CaddyErr = caddy.InstalledBuild(ctx, o.layout)
+	if m, err := LoadManifest(o.layout); err == nil {
+		v.LocalCaddy = m.LocalCaddy
+	}
 	v.CaddyRelease, v.ReleaseErr = caddy.ReleaseBuild(ctx)
 	v.SingBox, v.SingBoxErr = singbox.InstalledVersion(ctx, o.layout)
 	v.SingBoxLatest, v.SingBoxUpErr = singbox.LatestVersion(ctx)
