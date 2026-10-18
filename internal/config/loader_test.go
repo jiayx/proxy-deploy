@@ -53,7 +53,6 @@ func TestLoadErrors(t *testing.T) {
 		"alias duplicate":        {"domain: a.com\ncertificates: {provider: internal}\n" + users + "protocols: {hy2: , hysteria2: }\n", "duplicate"},
 		"user unknown protocol":  {"domain: a.com\ncertificates: {provider: internal}\nusers: [{name: a, secret: 0123456789abcdef, protocols: [tuic]}]\nprotocols: {anytls: }\n", "not configured"},
 		"bad port":               {"domain: a.com\ncertificates: {provider: internal}\nentry: {https_port: 70000}\n" + users, "invalid port"},
-		"missing email":          {"domain: a.com\n", "email"},
 		"missing domain":         {"certificates: {provider: internal}\n", "domain"},
 		"acme without ca":        {"domain: a.com\ncertificates: {provider: acme, email: a@a.com}\n", "ca"},
 		"proxy without upstream": {"domain: a.com\ncertificates: {provider: internal}\nweb: [{name: x, type: reverse_proxy}]\n" + users, "upstream"},

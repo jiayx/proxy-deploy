@@ -100,7 +100,7 @@ server:
 
 certificates:
   provider: letsencrypt
-  email: admin@example.com
+  # email: admin@example.com   # 可选
 
 entry:
   https_port: 443
@@ -158,9 +158,9 @@ Shadowsocks 没有 TLS 握手，网关无法按 SNI 分流，所以 `ss2022` 独
 
 | `certificates.provider` | 配置与行为 |
 | --- | --- |
-| `letsencrypt`（默认） | 使用 Let's Encrypt，必须填写 `email` |
-| `acme` | 自定义 ACME 服务，必须填写 `email` 和 `ca`（ACME directory URL） |
-| `internal` | 使用 Caddy 内部 CA，适合测试，无需 `email`；不会自动安装根证书到系统信任库，生成的客户端 URI 带 `insecure=1` |
+| `letsencrypt`（默认） | 使用 Let's Encrypt；`email` 可选，作为 ACME 账号的联系邮箱 |
+| `acme` | 自定义 ACME 服务，必须填写 `ca`（ACME directory URL），`email` 可选 |
+| `internal` | 使用 Caddy 内部 CA，适合测试；不会自动安装根证书到系统信任库，生成的客户端 URI 带 `insecure=1` |
 
 ACME 配置还支持 `dns_provider` 和 `dns_config`，分别指定 Caddy DNS provider 名称及其配置字段。使用 DNS 验证时，需在 `cmd/proxy-gateway/main.go` 中加入对应 DNS provider 模块的 import 后自行构建，用构建出的程序执行 `deploy`；预构建的程序不含 DNS provider。
 

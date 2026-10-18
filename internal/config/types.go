@@ -24,9 +24,9 @@ type ServerConfig struct {
 
 // CertificateConfig 证书配置
 type CertificateConfig struct {
-	Provider    string            `yaml:"provider"` // letsencrypt | acme | internal
-	Email       string            `yaml:"email,omitempty"`
-	CA          string            `yaml:"ca,omitempty"` // provider=acme 时的 ACME directory URL
+	Provider    string            `yaml:"provider"`        // letsencrypt | acme | internal
+	Email       string            `yaml:"email,omitempty"` // 可选，ACME 账号的联系邮箱
+	CA          string            `yaml:"ca,omitempty"`    // provider=acme 时的 ACME directory URL
 	DNSProvider string            `yaml:"dns_provider,omitempty"`
 	DNSConfig   map[string]string `yaml:"dns_config,omitempty"`
 }

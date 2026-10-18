@@ -69,9 +69,6 @@ func (c *DeployConfig) Validate() error {
 		c.Certificates.Provider = "letsencrypt"
 		fallthrough
 	case "letsencrypt", "acme":
-		if c.Certificates.Email == "" {
-			return fmt.Errorf("certificates.email is required for provider %q", c.Certificates.Provider)
-		}
 		if c.Certificates.Provider == "acme" && c.Certificates.CA == "" {
 			return fmt.Errorf("certificates.ca is required for provider acme")
 		}
@@ -158,7 +155,7 @@ server:
 
 certificates:
   provider: letsencrypt     # letsencrypt | acme | internal（自签，测试用）
-  email: admin@example.com
+  # email: admin@example.com   # 可选，ACME 账号的联系邮箱
 
 entry:
   https_port: 443           # TCP/UDP 入口，网关按 SNI 分流
