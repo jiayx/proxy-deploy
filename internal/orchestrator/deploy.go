@@ -48,9 +48,13 @@ func (o *Orchestrator) Deploy(ctx context.Context, p *Plan, caddyBinary string, 
 	}
 
 	logf("安装 Caddy（网关）")
-	caddyChanged, err := caddy.Install(ctx, o.layout, caddyBinary)
+	keepLocal := caddyBinary == "" && prev != nil && prev.LocalCaddy
+	caddyChanged, warning, err := caddy.Install(ctx, o.layout, caddyBinary, keepLocal)
 	if err != nil {
 		return err
+	}
+	if warning != "" {
+		logf("警告：%s", warning)
 	}
 	for _, s := range p.Services {
 		logf("安装 %s", s.Cfg.Name)
@@ -75,7 +79,8 @@ func (o *Orchestrator) Deploy(ctx context.Context, p *Plan, caddyBinary string, 
 	}
 
 	unit := o.caddyUnit()
-	m := &Manifest{Prefix: o.layout.Prefix, User: o.layout.User, Services: []string{caddyUnit}, Units: []string{unit.Name}, Ports: p.Ports}
+	m := &Manifest{Prefix: o.layout.Prefix, User: o.layout.User, Services: []string{caddyUnit}, Units: []string{unit.Name}, Ports: p.Ports,
+		LocalCaddy: caddyBinary != "" || keepLocal}
 	for _, c := range p.Certs {
 		m.Certs = append(m.Certs, CertFile{c.Name, c.CertPath})
 	}

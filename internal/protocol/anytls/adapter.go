@@ -1,7 +1,7 @@
 // Package anytls 实现 AnyTLS 协议的部署适配器，服务端使用 sing-box。
 //
-// AnyTLS 是 TCP 协议，与网站共享 TCP 入口端口，由 Caddy l4 按 SNI 分流。
-// Caddy 用统一管理的证书终结客户端 TLS，再把明文转发到回环地址上的 sing-box anytls inbound，
+// AnyTLS 是 TCP 协议，与网站共享 TCP 入口端口，由网关按 SNI 分流。
+// 网关用 Caddy 统一管理的证书终结客户端 TLS，再把明文转发到回环地址上的 sing-box anytls inbound，
 // 所以 inbound 本身不配置 TLS。
 // （anytls-go 是协议的参考实现，定位为演示，且服务端强制使用自签 TLS，不适合这种部署方式。）
 package anytls

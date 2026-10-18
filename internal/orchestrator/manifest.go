@@ -19,6 +19,8 @@ type Manifest struct {
 	Units    []string   `json:"units"`    // 写入 unit 目录的全部文件名
 	Ports    []Port     `json:"ports"`
 	Certs    []CertFile `json:"certs"`
+	// LocalCaddy 表示 Caddy 是 --caddy-binary 指定的本地构建（例如加了 DNS provider），之后的部署不自动换成发布版本
+	LocalCaddy bool `json:"local_caddy,omitempty"`
 }
 
 type CertFile struct {

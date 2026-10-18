@@ -412,7 +412,7 @@ func (o *Orchestrator) clientConfig(s *Service, u protocol.User, insecure bool) 
 func userPolicies(c *config.DeployConfig) []caddy.UserPolicy {
 	out := make([]caddy.UserPolicy, 0, len(c.Users))
 	for _, u := range c.Users {
-		out = append(out, caddy.UserPolicy{Name: u.Name, TrafficLimit: u.LimitBytes(), ResetDay: u.ResetDay, Expire: u.ExpireAt()})
+		out = append(out, caddy.UserPolicy{Name: u.Name, TrafficLimit: u.LimitBytes(), ResetDay: u.ResetDay, Expire: u.ExpireAt(), Protocols: u.Protocols})
 	}
 	return out
 }

@@ -145,7 +145,7 @@ type ClientContext struct {
 type Transport int
 
 const (
-	TransportTCP  Transport = iota // TCP，可共享入口端口，由 Caddy l4 按 SNI 转发
+	TransportTCP  Transport = iota // TCP，可共享入口端口，由网关按 SNI 转发
 	TransportUDP                   // UDP/QUIC，单独占用端口，或同端口按 QUIC SNI 分流
 	TransportBoth                  // 同时监听 TCP 和 UDP
 )

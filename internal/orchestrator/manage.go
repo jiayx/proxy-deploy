@@ -71,17 +71,18 @@ type BackendStatus struct {
 
 // UserStats 是一个用户的统计，对应 gateway.UserSnapshot
 type UserStats struct {
-	User         string `json:"user"`
-	State        string `json:"state"`
-	Active       int64  `json:"active"`
-	Total        int64  `json:"total"`
-	BytesUp      int64  `json:"bytes_up"`
-	BytesDown    int64  `json:"bytes_down"`
-	PeriodUp     int64  `json:"period_up"`
-	PeriodDown   int64  `json:"period_down"`
-	PeriodStart  string `json:"period_start"`
-	TrafficLimit int64  `json:"traffic_limit"`
-	Expire       string `json:"expire"`
+	User         string   `json:"user"`
+	State        string   `json:"state"`
+	Active       int64    `json:"active"`
+	Total        int64    `json:"total"`
+	BytesUp      int64    `json:"bytes_up"`
+	BytesDown    int64    `json:"bytes_down"`
+	PeriodUp     int64    `json:"period_up"`
+	PeriodDown   int64    `json:"period_down"`
+	PeriodStart  string   `json:"period_start"`
+	TrafficLimit int64    `json:"traffic_limit"`
+	Expire       string   `json:"expire"`
+	Protocols    []string `json:"protocols"`
 }
 
 // UserStats 读取网关按用户累计的统计

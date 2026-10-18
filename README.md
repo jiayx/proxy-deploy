@@ -1,6 +1,6 @@
 # proxy-deploy
 
-`proxyd` 是一个面向 Linux / systemd 的代理服务部署编排 CLI。它把 Caddy（含本仓库实现的入口网关 `proxy_gateway`）、代理协议服务和网站组合成一套部署：根据 YAML 配置规划公网入口、管理证书、安装二进制、生成配置与 systemd unit，并提供状态、日志、重启和卸载命令。
+`proxyd` 是一个面向 Linux / systemd 的代理服务部署编排 CLI。它把 Caddy（含本仓库实现的入口网关 `proxy_gateway`）、代理协议服务和网站组合成一套部署：根据 YAML 配置规划公网入口、管理证书、安装二进制、生成配置和唯一的 systemd 服务（Caddy，协议后端由其中的网关监管），并提供状态、日志、重启和卸载命令。
 
 当前支持 **AnyTLS**、**VLESS + Reality**（TCP，经网关）、**Hysteria2**、**TUIC v5**（QUIC，经网关）和 **Shadowsocks 2022**（TCP+UDP，经网关的专用端口），服务端均由 sing-box 提供；网站支持静态文件和反向代理。支持系统级部署和 `--user` 用户级部署。
 
@@ -29,7 +29,7 @@
 - 主入口端口总是开启 UDP 网关：内部网站因此提供 HTTP/3，TCP 网站通过 `Alt-Svc` 通告对外端口。需要放行 UDP/443。
 - 网关为每个连接（UDP 为每个会话）记录一条日志（客户端地址、SNI、路由、后端本地地址、字节数、时长），`status` 显示每条路由的活动连接、累计连接和流量。网关重载配置时不会断开已建立的 TCP 连接和 QUIC 会话。
 - 网关按用户统计流量：用户认证发生在 sing-box 内部，网关从它的日志中得知每个连接属于哪个用户（sing-box 日志中的来源端口就是网关连接后端用的本地端口），把连接流量计入该用户。`status` 显示每个用户的活动连接、累计连接和上下行流量；网关连接日志带 `user` 字段。统计按加密后的传输字节计算，会略多于实际内容；认证失败的连接不计入任何用户。用户流量每 30 秒及 Caddy 停止时写入 `<prefix>/var/usage.json`，重启后接着累计（`uninstall` 会一并删除）。
-- 用户超过 `traffic_limit` 或过了 `expire` 后，网关断开他的全部活动连接；之后的新连接在认证完成、识别出用户时立即断开（不需要修改 sing-box 配置）。`status` 显示每个用户的状态、本周期用量 / 上限和到期日；修改上限或到期日后重新部署即可生效，已用流量不受影响。用量每秒结算一次，所以实际用量可能超出上限约 1 秒的传输量。
+- 用户超过 `traffic_limit` 或过了 `expire` 后，网关断开他的全部活动连接；之后的新连接在认证完成、识别出用户时立即断开（不需要修改 sing-box 配置）。`status` 显示每个用户的状态、本周期用量 / 上限、到期日和限定的协议；修改上限或到期日后重新部署即可生效，已用流量不受影响。用量每秒结算一次，所以实际用量可能超出上限约 1 秒的传输量。
 - UDP 会话按客户端地址识别，空闲 2 分钟后清理。网关同时学习每个会话的 QUIC 连接 ID，客户端地址变化（NAT 重新映射、切换网络但沿用原 socket）后仍能找回原会话，连接不断；客户端主动迁移并换用新连接 ID 时需要重新连接。Linux 上网关用 UDP GRO/GSO 成批转发后端回包。
 - 内部网站以 HTTPS 监听 `127.0.0.1:20000`（供 TCP 入口转发，支持 HTTP/1.1 和 HTTP/2；入口通过 PROXY protocol 传递客户端地址，网站访问日志和反代后端的 `X-Forwarded-For` 都是真实 IP），同时以明文 HTTP 监听 `127.0.0.1:20001`（供协议伪装反代，保留原始 Host）；每个经网关转发的协议在适配器中声明固定的回环端口（Hysteria2 20002、AnyTLS 20003、VLESS + Reality 20004、TUIC 20005），测试保证互不重复；启用、停用、新增或删除其他协议都不会改变已有协议的端口，也就不会让它们重启。
 - 协议后端（sing-box）日志中的来源地址都是 `127.0.0.1`：sing-box 自 1.6 起不再支持 PROXY protocol。客户端真实地址记录在网关日志中，网关日志的 `upstream_local` 与 sing-box 日志中的来源端口一一对应。
@@ -175,6 +175,7 @@ web:
 | `deploy` | 安装、更新并启动服务，输出客户端 URI | 是 |
 | `client-config [用户]` | 根据当前 YAML 生成客户端 URI，按用户分组；指定用户时只输出该用户的 | 是 |
 | `status` | 查看已安装服务状态与证书有效期 | 否，读取安装清单 |
+| `version` | 查看 proxyd、Caddy、sing-box 的版本，检查是否有新版本（需要访问 GitHub） | 否 |
 | `logs <服务>` | `caddy` 查看整个服务的日志（含网关连接日志），协议名只看该协议后端的输出 | 否，读取安装清单 |
 | `restart [服务]` | 不指定或 `caddy` 时重启整个服务，指定协议名时只重启该协议的后端进程 | 否，读取安装清单 |
 | `uninstall` | 停用并删除记录的 unit，删除整个安装目录 | 否，读取安装清单 |
@@ -184,7 +185,7 @@ web:
 | `-c <路径>` | 配置路径，默认 `deploy.yaml` |
 | `--prefix <目录>` | 安装目录，系统模式默认 `/opt/proxy-deploy`，用户模式默认 `~/.local/proxy-deploy`；建议使用独立的绝对路径 |
 | `--user` | 使用 `systemctl --user` 和用户级 unit 目录 |
-| `--caddy-binary <路径>` | `deploy` 时复制并使用本地 Caddy 二进制，必须包含 `proxy_gateway` 模块（`go build ./cmd/caddy` 构建） |
+| `--caddy-binary <路径>` | `deploy` 时复制并使用本地 Caddy 二进制，必须包含 `proxy_gateway` 模块（`go build ./cmd/caddy` 构建）；之后的部署沿用它，不自动换成发布版本 |
 | `--show-caddy` | `plan` 时额外输出生成的 Caddy JSON |
 | `-n <行数>` / `-f` | 日志行数（默认 50）/ 持续跟随日志 |
 
@@ -216,11 +217,12 @@ sudo ./proxyd uninstall
 
 ## 程序安装与文件布局
 
-部署使用的 Caddy 由本仓库的 `cmd/caddy` 构建：官方标准模块加上 `gateway/` 中的入口网关，Caddy 及依赖版本由 `go.mod` 固定，`go build ./cmd/caddy` 即可构建。安装来源按以下优先级选择，并在安装后检查网关模块：
+部署使用的 Caddy 由本仓库的 `cmd/caddy` 构建：官方标准模块加上 `gateway/` 中的入口网关，Caddy 及依赖版本由 `go.mod` 固定，`go build ./cmd/caddy` 即可构建。安装后都会检查网关模块：
 
-1. `--caddy-binary` 指定的本地文件。
-2. 安装目录中已有的 `bin/caddy`。
-3. 本项目 GitHub Releases 中 `caddy` release 的 `caddy-gateway-<os>-<arch>` 预构建文件，用同时发布的 `.sha256` 文件校验。该 release 由 `.github/workflows/caddy.yml` 在网关代码或依赖变化时构建 linux amd64 / arm64。
+- 默认使用本项目 GitHub Releases 中 `caddy` release 的 `caddy-gateway-<os>-<arch>` 预构建文件，用同时发布的 `.sha256` 文件校验。该 release 由 `.github/workflows/caddy.yml` 在网关代码或依赖变化时构建 linux amd64 / arm64。每次 `deploy` 都会比较校验和：发布版本更新后自动下载替换并重启 Caddy（重启会断开现有连接）；暂时无法访问 GitHub 时沿用已安装的版本并给出警告。
+- `--caddy-binary` 指定的本地构建（例如加了 DNS provider）。安装清单会记住这一点，之后不带该选项的 `deploy` 也沿用它，不会换成发布版本；要换回发布版本，删除 `bin/caddy` 后重新部署。
+
+`proxyd version` 显示 proxyd、Caddy、sing-box 的当前版本，并检查是否有新版本：proxyd 与仓库 `main` 分支比较，Caddy 与最新发布的预构建版本比较（release 中的 `caddy-gateway.revision` 记录了构建所用的提交），sing-box 与上游最新正式版比较。sing-box 的版本固定在 proxyd 中，上游发布新版本后需要更新 proxyd 才会升级。
 
 协议程序从各自上游 GitHub Releases 下载，版本和各平台的 sha256 固定在适配器源码中（当前 sing-box `1.14.3`，支持 linux amd64 / arm64），校验不通过不会写入文件。所有协议都使用 sing-box 作为服务端：共用一份二进制，每个协议运行一个独立进程，修改或重启某个协议不影响其他协议的连接。程序按版本保存并通过符号链接使用；重复部署会复用已存在的版本，部署成功后清理 `bin/` 中不再使用的程序和版本；更新配置不会自动追踪上游最新版本。部署主机需能访问相应下载地址。
 

@@ -1,6 +1,6 @@
 // Package singbox 安装 sing-box 并生成单个 inbound 的配置，供基于 sing-box 的协议适配器共用。
 //
-// 每个协议运行一个独立的 sing-box 进程（独立的配置和 systemd unit），
+// 每个协议运行一个独立的 sing-box 进程（独立的配置，由网关启动和监管），
 // 二进制只安装一份，多个协议共用。
 package singbox
 
@@ -18,10 +18,10 @@ import (
 	"github.com/jiayx/proxy-deploy/pkg/system"
 )
 
-const (
-	binName = "sing-box"
-	version = "1.14.3"
-)
+const binName = "sing-box"
+
+// Version 是安装的 sing-box 版本，升级时连同 checksums 一起更新
+const Version = "1.14.3"
 
 // checksums 是上游发布包的 sha256，按 GOOS/GOARCH 固定；升级版本时一并更新
 var checksums = map[string]string{
@@ -36,17 +36,47 @@ func Bin(layout *paths.Layout) string { return layout.ProtocolBin(binName) }
 func Install(ctx context.Context, layout *paths.Layout) error {
 	sum, ok := checksums[runtime.GOOS+"/"+runtime.GOARCH]
 	if !ok {
-		return fmt.Errorf("sing-box %s 不支持 %s/%s", version, runtime.GOOS, runtime.GOARCH)
+		return fmt.Errorf("sing-box %s 不支持 %s/%s", Version, runtime.GOOS, runtime.GOARCH)
 	}
 	u := fmt.Sprintf("https://github.com/SagerNet/sing-box/releases/download/v%s/sing-box-%s-%s-%s.tar.gz",
-		version, version, runtime.GOOS, runtime.GOARCH)
-	return system.InstallVersioned(layout.VersionedBin(binName, version), Bin(layout),
+		Version, Version, runtime.GOOS, runtime.GOARCH)
+	return system.InstallVersioned(layout.VersionedBin(binName, Version), Bin(layout),
 		func(dest string) error { return system.DownloadAndExtract(ctx, u, sum, binName, dest, 0755) })
 }
 
-// Args 返回运行 sing-box 的命令行；日志写入 journald，关闭终端颜色
+// Args 返回运行 sing-box 的命令行；输出由网关写入 Caddy 日志，关闭终端颜色
 func Args(layout *paths.Layout, configPath string) []string {
 	return []string{Bin(layout), "run", "--disable-color", "-c", configPath}
+}
+
+// InstalledVersion 返回已安装的 sing-box 版本
+func InstalledVersion(ctx context.Context, layout *paths.Layout) (string, error) {
+	out, err := exec.CommandContext(ctx, Bin(layout), "version").Output()
+	if err != nil {
+		return "", err
+	}
+	// 第一行形如 "sing-box version 1.14.3"
+	line, _, _ := strings.Cut(string(out), "\n")
+	f := strings.Fields(line)
+	if len(f) < 3 {
+		return "", fmt.Errorf("unexpected sing-box version output %q", line)
+	}
+	return f[2], nil
+}
+
+// LatestVersion 返回上游最新的正式版本号（GitHub releases/latest，不含预发布）
+func LatestVersion(ctx context.Context) (string, error) {
+	data, err := system.Fetch(ctx, "https://api.github.com/repos/SagerNet/sing-box/releases/latest")
+	if err != nil {
+		return "", err
+	}
+	var rel struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.Unmarshal(data, &rel); err != nil || rel.TagName == "" {
+		return "", fmt.Errorf("parse sing-box latest release: %v", err)
+	}
+	return strings.TrimPrefix(rel.TagName, "v"), nil
 }
 
 // Check 用 sing-box check 校验配置文件
@@ -75,7 +105,7 @@ func Config(listenAddr string, inbound map[string]any) ([]byte, error) {
 	inbound["listen"] = host
 	inbound["listen_port"] = port
 	cfg := map[string]any{
-		// journald 已带时间戳
+		// Caddy 日志已带时间戳
 		"log":       map[string]any{"level": "info", "timestamp": false},
 		"inbounds":  []any{inbound},
 		"outbounds": []any{map[string]any{"type": "direct", "tag": "direct"}},

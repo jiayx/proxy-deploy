@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"sync"
@@ -39,7 +40,7 @@ type userStats struct {
 	state                atomic.Value // string：上次检查的状态，变化时记日志
 }
 
-// UserPolicy 是用户的流量上限和到期设置
+// UserPolicy 是用户的流量上限、到期和可用协议设置
 type UserPolicy struct {
 	// TrafficLimit 是每个周期的流量上限（上下行合计，字节），0 表示不限
 	TrafficLimit int64 `json:"traffic_limit,omitempty"`
@@ -47,8 +48,14 @@ type UserPolicy struct {
 	ResetDay int `json:"reset_day,omitempty"`
 	// Expire 是到期时刻（RFC 3339），为空表示不过期
 	Expire string `json:"expire,omitempty"`
+	// Protocols 是用户可以使用的后端（协议名），为空表示全部。后端本来就只接受这些用户，网关再检查一次
+	Protocols []string `json:"protocols,omitempty"`
 
 	expireAt time.Time
+}
+
+func (p *UserPolicy) allows(backend string) bool {
+	return len(p.Protocols) == 0 || slices.Contains(p.Protocols, backend)
 }
 
 // 用户状态
@@ -110,17 +117,18 @@ func statsForUser(name string) *userStats {
 
 // UserSnapshot 是管理接口返回的一个用户的统计
 type UserSnapshot struct {
-	User         string `json:"user"`
-	State        string `json:"state"`
-	Active       int64  `json:"active"`
-	Total        int64  `json:"total"`
-	BytesUp      int64  `json:"bytes_up"`
-	BytesDown    int64  `json:"bytes_down"`
-	PeriodUp     int64  `json:"period_up"`
-	PeriodDown   int64  `json:"period_down"`
-	PeriodStart  string `json:"period_start,omitempty"`
-	TrafficLimit int64  `json:"traffic_limit,omitempty"`
-	Expire       string `json:"expire,omitempty"`
+	User         string   `json:"user"`
+	State        string   `json:"state"`
+	Active       int64    `json:"active"`
+	Total        int64    `json:"total"`
+	BytesUp      int64    `json:"bytes_up"`
+	BytesDown    int64    `json:"bytes_down"`
+	PeriodUp     int64    `json:"period_up"`
+	PeriodDown   int64    `json:"period_down"`
+	PeriodStart  string   `json:"period_start,omitempty"`
+	TrafficLimit int64    `json:"traffic_limit,omitempty"`
+	Expire       string   `json:"expire,omitempty"`
+	Protocols    []string `json:"protocols,omitempty"`
 }
 
 func userSnapshots() []UserSnapshot {
@@ -133,7 +141,7 @@ func userSnapshots() []UserSnapshot {
 		snap := UserSnapshot{User: s.name, State: s.checkState(now), Active: s.Active.Load(), Total: s.Total.Load(),
 			BytesUp: s.BytesUp.Load(), BytesDown: s.BytesDown.Load(),
 			PeriodUp: s.PeriodUp.Load(), PeriodDown: s.PeriodDown.Load(),
-			TrafficLimit: p.TrafficLimit, Expire: p.Expire}
+			TrafficLimit: p.TrafficLimit, Expire: p.Expire, Protocols: p.Protocols}
 		if ps := s.periodStart.Load(); ps != 0 {
 			snap.PeriodStart = time.Unix(ps, 0).Format(time.RFC3339)
 		}
@@ -220,8 +228,8 @@ func attributeUser(backend string, packet bool, port int, user string) {
 			rec.user.Store(u)
 			u.Active.Add(1)
 			u.Total.Add(1)
-			if u.checkState(time.Now()) != UserActive {
-				rec.disconnect() // 超额或到期的用户：认证一完成就断开
+			if u.checkState(time.Now()) != UserActive || !policyFor(user).allows(backend) {
+				rec.disconnect() // 超额、到期或无权使用该协议的用户：认证一完成就断开
 			}
 		}
 		return

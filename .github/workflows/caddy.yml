@@ -1,7 +1,8 @@
 name: caddy
 
 # 构建部署所用的 Caddy（官方标准模块 + 本仓库的 proxy_gateway 网关），发布到固定的 release tag `caddy`。
-# caddy.Install 从 releases/download/caddy/caddy-gateway-<os>-<arch> 下载，并用同名 .sha256 文件校验。
+# caddy.Install 从 releases/download/caddy/caddy-gateway-<os>-<arch> 下载，并用同名 .sha256 文件校验；
+# 每次 deploy 都比较校验和，发布版本更新后自动替换。caddy-gateway.revision 记录构建所用的提交。
 # Caddy 及其依赖的版本由 go.mod 固定，升级时修改 go.mod 即可。
 on:
   workflow_dispatch:
@@ -48,6 +49,8 @@ jobs:
             echo '```'
           } > notes.md
           cd dist && for f in *; do sha256sum "$f" > "$f.sha256"; done
+          # proxyd version 据此判断已安装的 Caddy 是否为最新发布版本
+          echo "$GITHUB_SHA $(git show -s --format=%cI HEAD)" > caddy-gateway.revision
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}

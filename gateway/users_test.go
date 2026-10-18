@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"path/filepath"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -191,5 +192,30 @@ func TestEnforcementDisconnects(t *testing.T) {
 	attributeUser("enf", false, 42002, name)
 	if got := <-closed; got != "second" {
 		t.Fatalf("expected the new connection to be closed, got %s", got)
+	}
+}
+
+func TestProtocolRestriction(t *testing.T) {
+	name := uniqueUser("grace")
+	setPolicies(map[string]*UserPolicy{name: {Protocols: []string{"allowed"}}})
+	defer setPolicies(nil)
+
+	closed := make(chan string, 2)
+	var up, down atomic.Int64
+	for i, backend := range []string{"allowed", "other"} {
+		rec, key := trackConn(backend, "tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 42101 + i}, &up, &down, func() { closed <- backend })
+		defer untrackConn(rec, key)
+		attributeUser(backend, false, 42101+i, name)
+	}
+	select {
+	case got := <-closed:
+		if got != "other" {
+			t.Fatalf("only the connection to a protocol the user may not use should be closed, got %s", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("connection to a disallowed protocol was not closed")
+	}
+	if snap := userSnapshots(); !slices.ContainsFunc(snap, func(s UserSnapshot) bool { return s.User == name && len(s.Protocols) == 1 }) {
+		t.Fatalf("snapshot should list the user's protocols: %+v", snap)
 	}
 }

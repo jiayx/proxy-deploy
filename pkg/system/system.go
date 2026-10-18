@@ -96,6 +96,23 @@ func extractTarGz(data []byte, entryName string) ([]byte, error) {
 	}
 }
 
+// Fetch 下载 url 的内容（用于校验文件、版本信息等小文件）
+func Fetch(ctx context.Context, url string) ([]byte, error) { return fetch(ctx, url, "") }
+
+// FileSHA256 返回文件内容的 sha256（十六进制）
+func FileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
 // FetchChecksum 读取 sha256sum 格式的校验文件，返回第一个字段
 func FetchChecksum(ctx context.Context, url string) (string, error) {
 	data, err := fetch(ctx, url, "")

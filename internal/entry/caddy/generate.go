@@ -83,12 +83,13 @@ type RawServer struct {
 	Upstream string
 }
 
-// UserPolicy 是一个用户的流量上限和到期设置
+// UserPolicy 是一个用户的流量上限、到期和可用协议设置
 type UserPolicy struct {
 	Name         string
 	TrafficLimit int64     // 每个周期的上限（字节），0 表示不限
 	ResetDay     int       // 每月重置日，0 表示默认（1 号）
 	Expire       time.Time // 到期时刻，零值表示不过期
+	Protocols    []string  // 可以使用的协议，为空表示全部
 }
 
 // Backend 是由网关启动并监管的协议后端进程
@@ -244,6 +245,9 @@ func gatewayApp(s Spec) obj {
 			if !u.Expire.IsZero() {
 				policy["expire"] = u.Expire.Format(time.RFC3339)
 			}
+			if len(u.Protocols) > 0 {
+				policy["protocols"] = u.Protocols
+			}
 			users[u.Name] = policy
 		}
 		app["users"] = users
@@ -310,7 +314,7 @@ func httpApp(s Spec) obj {
 	}
 
 	return obj{"servers": obj{
-		// 内部 HTTPS 网站：只监听回环地址，由 l4 入口转发过来
+		// 内部 HTTPS 网站：只监听回环地址，由网关转发过来
 		"site": obj{
 			"listen":          []string{s.SiteAddr},
 			"protocols":       protocols,
