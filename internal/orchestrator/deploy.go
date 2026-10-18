@@ -19,10 +19,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jiayx/proxy-deploy/internal/config"
-	"github.com/jiayx/proxy-deploy/internal/entry/caddy"
-	"github.com/jiayx/proxy-deploy/internal/protocol"
-	"github.com/jiayx/proxy-deploy/pkg/system"
+	"github.com/jiayx/proxy-gateway/internal/config"
+	"github.com/jiayx/proxy-gateway/internal/entry/caddy"
+	"github.com/jiayx/proxy-gateway/internal/protocol"
+	"github.com/jiayx/proxy-gateway/pkg/system"
 )
 
 // Logf 输出部署进度
@@ -35,7 +35,7 @@ const backendTimeout = 3 * time.Minute
 //
 // systemd 只管理网关（proxy-gateway）；协议后端进程由网关启动和监管。配置没有变化的协议
 // 在网关重载配置后沿用原进程，连接不断。
-func (o *Orchestrator) Deploy(ctx context.Context, p *Plan, gatewayBinary string, logf Logf) error {
+func (o *Orchestrator) Deploy(ctx context.Context, p *Plan, logf Logf) error {
 	if len(p.Conflicts) > 0 {
 		return errors.New("规划存在冲突，未做任何变更")
 	}
@@ -47,16 +47,10 @@ func (o *Orchestrator) Deploy(ctx context.Context, p *Plan, gatewayBinary string
 		return err
 	}
 
-	logf("安装网关 proxy-gateway")
-	// 之前用 --gateway-binary 安装的本地构建继续沿用；删掉它就换回发布版本
-	_, statErr := os.Stat(o.layout.GatewayBin())
-	keepLocal := gatewayBinary == "" && prev != nil && prev.LocalGateway && statErr == nil
-	gatewayChanged, warning, err := caddy.Install(ctx, o.layout, gatewayBinary, keepLocal)
+	logf("安装 %s", o.layout.GatewayBin())
+	gatewayChanged, err := caddy.Install(o.layout)
 	if err != nil {
 		return err
-	}
-	if warning != "" {
-		logf("警告：%s", warning)
 	}
 	for _, s := range p.Services {
 		logf("安装 %s", s.Cfg.Name)
@@ -81,8 +75,7 @@ func (o *Orchestrator) Deploy(ctx context.Context, p *Plan, gatewayBinary string
 	}
 
 	unit := o.gatewayUnit()
-	m := &Manifest{Prefix: o.layout.Prefix, User: o.layout.User, Services: []string{gatewayUnit}, Units: []string{unit.Name}, Ports: p.Ports,
-		LocalGateway: gatewayBinary != "" || keepLocal}
+	m := &Manifest{Prefix: o.layout.Prefix, User: o.layout.User, Services: []string{gatewayUnit}, Units: []string{unit.Name}, Ports: p.Ports}
 	for _, c := range p.Certs {
 		m.Certs = append(m.Certs, CertFile{c.Name, c.CertPath})
 	}
@@ -209,7 +202,7 @@ func (o *Orchestrator) writeProtocolConfig(ctx context.Context, s *Service) (*ca
 
 // checkWithTempCert 用临时自签证书代替尚未签发的证书生成配置并校验，只校验不写入
 func (o *Orchestrator) checkWithTempCert(s *Service, check func(string) error) error {
-	dir, err := os.MkdirTemp("", "proxyd-check-")
+	dir, err := os.MkdirTemp("", "proxy-gateway-check-")
 	if err != nil {
 		return err
 	}

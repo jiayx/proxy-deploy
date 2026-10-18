@@ -1,4 +1,4 @@
-// Package gateway 是 proxy-deploy 的入口网关，以 Caddy 应用模块（proxy_gateway）的形式运行。
+// Package gateway 是 proxy-gateway 的入口网关，以 Caddy 应用模块（proxy_gateway）的形式运行。
 //
 // 所有公网连接先进入网关：网关解析 TLS ClientHello 取得 SNI，匹配到代理协议的路由时
 // 用 Caddy 管理的证书终结 TLS 并把明文转给回环地址上的协议后端；其余连接原样透传给网站。

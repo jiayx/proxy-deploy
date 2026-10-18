@@ -19,13 +19,13 @@ type Layout struct {
 // DefaultPrefix 返回默认安装前缀
 func DefaultPrefix(user bool) string {
 	if !user {
-		return "/opt/proxy-deploy"
+		return "/opt/proxy-gateway"
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".local", "proxy-deploy")
+	return filepath.Join(home, ".local", "proxy-gateway")
 }
 
 func New(prefix string, user bool) *Layout {
@@ -43,11 +43,11 @@ func (l *Layout) ManifestPath() string { return filepath.Join(l.Prefix, "manifes
 
 func (l *Layout) GatewayBin() string { return filepath.Join(l.BinDir(), "proxy-gateway") }
 func (l *Layout) GatewayConfig() string {
-	return filepath.Join(l.EtcDir(), "proxy-gateway", "config.json")
+	return filepath.Join(l.EtcDir(), "gateway", "config.json")
 }
-func (l *Layout) GatewayDataDir() string { return filepath.Join(l.VarDir(), "proxy-gateway") }
+func (l *Layout) GatewayDataDir() string { return filepath.Join(l.VarDir(), "gateway") }
 func (l *Layout) GatewayAdminSocket() string {
-	return filepath.Join(l.VarDir(), "proxy-gateway-admin.sock")
+	return filepath.Join(l.VarDir(), "admin.sock")
 }
 
 func (l *Layout) ProtocolBin(name string) string { return filepath.Join(l.BinDir(), name) }

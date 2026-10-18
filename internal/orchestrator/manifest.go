@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/jiayx/proxy-deploy/pkg/paths"
-	"github.com/jiayx/proxy-deploy/pkg/system"
+	"github.com/jiayx/proxy-gateway/pkg/paths"
+	"github.com/jiayx/proxy-gateway/pkg/system"
 )
 
 // Manifest 记录一次部署在系统中留下的全部痕迹，status/logs/uninstall 都只依赖它
@@ -19,8 +19,6 @@ type Manifest struct {
 	Units    []string   `json:"units"`    // 写入 unit 目录的全部文件名
 	Ports    []Port     `json:"ports"`
 	Certs    []CertFile `json:"certs"`
-	// LocalGateway 表示网关是 --gateway-binary 指定的本地构建（例如加了 DNS provider），之后的部署不自动换成发布版本
-	LocalGateway bool `json:"local_gateway,omitempty"`
 }
 
 type CertFile struct {

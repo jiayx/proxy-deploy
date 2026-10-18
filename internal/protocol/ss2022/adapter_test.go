@@ -5,10 +5,10 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/jiayx/proxy-deploy/internal/config"
-	"github.com/jiayx/proxy-deploy/internal/protocol"
-	"github.com/jiayx/proxy-deploy/pkg/paths"
-	"github.com/jiayx/proxy-deploy/pkg/secrets"
+	"github.com/jiayx/proxy-gateway/internal/config"
+	"github.com/jiayx/proxy-gateway/internal/protocol"
+	"github.com/jiayx/proxy-gateway/pkg/paths"
+	"github.com/jiayx/proxy-gateway/pkg/secrets"
 )
 
 func TestValidate(t *testing.T) {

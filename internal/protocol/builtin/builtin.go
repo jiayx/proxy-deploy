@@ -1,14 +1,14 @@
-// Package builtin 注册 proxy-deploy 内置的全部协议适配器。
+// Package builtin 注册 proxy-gateway 内置的全部协议适配器。
 package builtin
 
 import (
-	"github.com/jiayx/proxy-deploy/internal/protocol"
-	"github.com/jiayx/proxy-deploy/internal/protocol/anytls"
-	"github.com/jiayx/proxy-deploy/internal/protocol/hysteria2"
-	"github.com/jiayx/proxy-deploy/internal/protocol/ss2022"
-	"github.com/jiayx/proxy-deploy/internal/protocol/tuic"
-	"github.com/jiayx/proxy-deploy/internal/protocol/vlessreality"
-	"github.com/jiayx/proxy-deploy/pkg/paths"
+	"github.com/jiayx/proxy-gateway/internal/protocol"
+	"github.com/jiayx/proxy-gateway/internal/protocol/anytls"
+	"github.com/jiayx/proxy-gateway/internal/protocol/hysteria2"
+	"github.com/jiayx/proxy-gateway/internal/protocol/ss2022"
+	"github.com/jiayx/proxy-gateway/internal/protocol/tuic"
+	"github.com/jiayx/proxy-gateway/internal/protocol/vlessreality"
+	"github.com/jiayx/proxy-gateway/pkg/paths"
 )
 
 // Registry 返回包含全部内置协议的注册表

@@ -10,11 +10,11 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/jiayx/proxy-deploy/internal/config"
-	"github.com/jiayx/proxy-deploy/internal/entry/caddy"
-	"github.com/jiayx/proxy-deploy/internal/protocol"
-	"github.com/jiayx/proxy-deploy/pkg/paths"
-	"github.com/jiayx/proxy-deploy/pkg/system"
+	"github.com/jiayx/proxy-gateway/internal/config"
+	"github.com/jiayx/proxy-gateway/internal/entry/caddy"
+	"github.com/jiayx/proxy-gateway/internal/protocol"
+	"github.com/jiayx/proxy-gateway/pkg/paths"
+	"github.com/jiayx/proxy-gateway/pkg/system"
 )
 
 const (

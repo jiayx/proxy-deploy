@@ -1,5 +1,7 @@
 name: ci
 
+# 测试；main 分支的每次提交都把 proxy-gateway 发布到滚动的预发布 `edge`，打 v* tag 时发布正式版本。
+# 程序同时是部署工具和网关（Caddy + proxy_gateway 模块），Caddy 及依赖版本由 go.mod 固定。
 on:
   push:
     branches: [main]
@@ -17,9 +19,8 @@ jobs:
       - run: go vet ./...
       - run: go test ./...
 
-  # 打 tag 时发布 proxyd；网关程序 proxy-gateway 由 proxy-gateway.yml 单独构建
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push'
     needs: test
     runs-on: ubuntu-latest
     permissions:
@@ -34,9 +35,29 @@ jobs:
           set -euo pipefail
           mkdir dist
           for arch in amd64 arm64; do
-            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -ldflags "-s -w" -o dist/proxyd-linux-$arch ./cmd/proxyd
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -ldflags "-s -w" -o dist/proxy-gateway-linux-$arch ./cmd/proxy-gateway
+          done
+          mods=$(dist/proxy-gateway-linux-amd64 list-modules)
+          for m in proxy_gateway admin.api.proxy_gateway; do
+            grep -qx "$m" <<<"$mods" || { echo "missing $m"; exit 1; }
           done
           cd dist && for f in *; do sha256sum "$f" > "$f.sha256"; done
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: dist/*
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes
+            exit 0
+          fi
+          # 先让 edge 标签指向本次提交，再更新滚动的预发布
+          git tag -f edge && git push -f origin refs/tags/edge
+          notes="main 分支 ${GITHUB_SHA::7} 的构建，每次提交自动更新。"
+          if gh release view edge >/dev/null 2>&1; then
+            gh release edit edge --notes "$notes" --prerelease --latest=false
+            gh release upload edge dist/* --clobber
+          else
+            gh release create edge dist/* --title "edge" --notes "$notes" --prerelease --latest=false
+          fi

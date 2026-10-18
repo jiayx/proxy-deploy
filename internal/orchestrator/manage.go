@@ -146,19 +146,19 @@ func certNotAfter(path string) (time.Time, error) {
 	return cert.NotAfter, nil
 }
 
-// Logs 输出日志：gateway 为整个网关服务（含连接日志和全部后端输出），协议名只输出该协议后端进程的日志
+// Logs 输出日志：name 为空时输出整个服务的日志（含网关连接日志和全部后端输出），协议名只输出该协议后端进程的日志
 func (o *Orchestrator) Logs(ctx context.Context, name string, lines int, follow bool) error {
 	m, err := LoadManifest(o.layout)
 	if err != nil {
 		return err
 	}
-	if name == "gateway" || name == gatewayUnit {
+	if name == "" || name == gatewayUnit {
 		cmd := exec.CommandContext(ctx, "journalctl", o.journalArgs(gatewayUnit, lines, follow)...)
 		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 		return cmd.Run()
 	}
 	if !slices.Contains(m.Backends, name) {
-		return fmt.Errorf("未知服务 %q，可选：gateway, %s", name, strings.Join(m.Backends, ", "))
+		return fmt.Errorf("未知协议 %q，可选：%s", name, strings.Join(m.Backends, ", "))
 	}
 
 	// 后端输出由网关写入自己的日志，带 "backend" 字段；从中筛出该后端的行
@@ -232,20 +232,20 @@ func backendLine(line, backend string) (string, bool) {
 	return ts + "  " + entry.Msg, true
 }
 
-// Restart 重启服务：不指定或 gateway 时重启整个网关（含全部协议后端），指定协议名时只重启该协议的后端进程
+// Restart 重启服务：不指定时重启整个服务（含全部协议后端），指定协议名时只重启该协议的后端进程
 func (o *Orchestrator) Restart(ctx context.Context, name string) error {
 	m, err := LoadManifest(o.layout)
 	if err != nil {
 		return err
 	}
-	if name == "" || name == "gateway" || name == gatewayUnit {
+	if name == "" || name == gatewayUnit {
 		if err := o.systemd.Restart(ctx, gatewayUnit); err != nil {
 			return o.withJournal(ctx, gatewayUnit, err)
 		}
 		return o.waitBackends(ctx, m.Backends, func(string, ...any) {})
 	}
 	if !slices.Contains(m.Backends, name) {
-		return fmt.Errorf("未知服务 %q，可选：gateway, %s", name, strings.Join(m.Backends, ", "))
+		return fmt.Errorf("未知协议 %q，可选：%s", name, strings.Join(m.Backends, ", "))
 	}
 	if err := o.admin(ctx, http.MethodPost, "/proxy_gateway/backends/"+name+"/restart", nil); err != nil {
 		return err

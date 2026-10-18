@@ -3,8 +3,8 @@ package builtin
 import (
 	"testing"
 
-	"github.com/jiayx/proxy-deploy/internal/protocol"
-	"github.com/jiayx/proxy-deploy/pkg/paths"
+	"github.com/jiayx/proxy-gateway/internal/protocol"
+	"github.com/jiayx/proxy-gateway/pkg/paths"
 )
 
 // 每个协议都经网关转发，必须声明固定的回环端口，且互不相同、不占用内部网站的端口（20000、20001）

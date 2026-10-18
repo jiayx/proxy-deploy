@@ -7,11 +7,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jiayx/proxy-deploy/internal/config"
-	"github.com/jiayx/proxy-deploy/internal/protocol"
-	"github.com/jiayx/proxy-deploy/internal/protocol/builtin"
-	"github.com/jiayx/proxy-deploy/pkg/paths"
-	"github.com/jiayx/proxy-deploy/pkg/secrets"
+	"github.com/jiayx/proxy-gateway/internal/config"
+	"github.com/jiayx/proxy-gateway/internal/protocol"
+	"github.com/jiayx/proxy-gateway/internal/protocol/builtin"
+	"github.com/jiayx/proxy-gateway/pkg/paths"
+	"github.com/jiayx/proxy-gateway/pkg/secrets"
 )
 
 func newOrch(t *testing.T, cfg *config.DeployConfig) *Orchestrator {

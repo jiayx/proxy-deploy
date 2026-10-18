@@ -15,11 +15,11 @@ import (
 	"regexp"
 	"strconv"
 
-	"github.com/jiayx/proxy-deploy/internal/config"
-	"github.com/jiayx/proxy-deploy/internal/protocol"
-	"github.com/jiayx/proxy-deploy/internal/protocol/singbox"
-	"github.com/jiayx/proxy-deploy/pkg/paths"
-	"github.com/jiayx/proxy-deploy/pkg/secrets"
+	"github.com/jiayx/proxy-gateway/internal/config"
+	"github.com/jiayx/proxy-gateway/internal/protocol"
+	"github.com/jiayx/proxy-gateway/internal/protocol/singbox"
+	"github.com/jiayx/proxy-gateway/pkg/paths"
+	"github.com/jiayx/proxy-gateway/pkg/secrets"
 )
 
 const (
@@ -56,7 +56,7 @@ var shortIDPattern = regexp.MustCompile(`^([0-9a-f]{2}){0,8}$`)
 
 func (a *Adapter) Validate(cfg *config.ProtocolConfig) error {
 	if _, err := secrets.RealityPublicKey(protocol.StringOption(cfg, "private_key")); err != nil {
-		return fmt.Errorf("private_key：%v（proxyd init-config 会生成）", err)
+		return fmt.Errorf("private_key：%v（proxy-gateway init-config 会生成）", err)
 	}
 	if !shortIDPattern.MatchString(protocol.StringOption(cfg, "short_id")) {
 		return fmt.Errorf("short_id 必须是 0 到 16 位偶数长度的小写十六进制")

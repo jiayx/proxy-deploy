@@ -14,8 +14,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/jiayx/proxy-deploy/pkg/paths"
-	"github.com/jiayx/proxy-deploy/pkg/system"
+	"github.com/jiayx/proxy-gateway/pkg/paths"
+	"github.com/jiayx/proxy-gateway/pkg/system"
 )
 
 const binName = "sing-box"

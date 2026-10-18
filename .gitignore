@@ -1,4 +1,4 @@
-/proxyd
+/proxy-gateway
 /dist/
 *.test
 deploy.yaml

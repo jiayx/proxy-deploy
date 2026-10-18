@@ -13,7 +13,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/jiayx/proxy-deploy/pkg/secrets"
+	"github.com/jiayx/proxy-gateway/pkg/secrets"
 )
 
 var (
@@ -94,7 +94,7 @@ func (c *DeployConfig) Validate() error {
 	}
 
 	if len(c.Users) == 0 {
-		return fmt.Errorf("users: at least one user is required (proxyd init-config generates one)")
+		return fmt.Errorf("users: at least one user is required (proxy-gateway init-config generates one)")
 	}
 	names, secrets := map[string]bool{}, map[string]bool{}
 	for i, u := range c.Users {
@@ -150,7 +150,7 @@ func Example() string {
 	return fmt.Sprintf(exampleTemplate, secrets.Password(), privateKey, secrets.ShortID(), secrets.Key(16))
 }
 
-const exampleTemplate = `# proxy-deploy 配置示例
+const exampleTemplate = `# proxy-gateway 配置示例
 domain: example.com
 
 server:
@@ -164,7 +164,7 @@ entry:
   https_port: 443           # TCP/UDP 入口，网关按 SNI 分流
   http_port: 80             # HTTP 跳转与 ACME HTTP-01 验证
 
-# 用户：各协议的密码、UUID、密钥都由 secret 推导，客户端链接按用户输出（proxyd client-config <用户>）
+# 用户：各协议的密码、UUID、密钥都由 secret 推导，客户端链接按用户输出（proxy-gateway client-config <用户>）
 users:
   - name: default
     secret: "%s"          # 更换即作废该用户的全部旧凭据

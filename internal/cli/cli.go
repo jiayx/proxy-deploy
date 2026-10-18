@@ -1,4 +1,5 @@
-package main
+// Package cli 实现 proxy-gateway 的部署和运维命令
+package cli
 
 import (
 	"context"
@@ -10,14 +11,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jiayx/proxy-deploy/internal/config"
-	"github.com/jiayx/proxy-deploy/internal/entry/caddy"
-	"github.com/jiayx/proxy-deploy/internal/orchestrator"
-	"github.com/jiayx/proxy-deploy/internal/protocol/builtin"
-	"github.com/jiayx/proxy-deploy/pkg/paths"
+	"github.com/jiayx/proxy-gateway/internal/config"
+	"github.com/jiayx/proxy-gateway/internal/entry/caddy"
+	"github.com/jiayx/proxy-gateway/internal/orchestrator"
+	"github.com/jiayx/proxy-gateway/internal/protocol/builtin"
+	"github.com/jiayx/proxy-gateway/pkg/paths"
 )
 
-const usage = `用法: proxyd [选项] <命令>
+const usage = `用法: proxy-gateway [选项] <命令>
 
 命令:
   init-config      输出示例 deploy.yaml
@@ -25,33 +26,46 @@ const usage = `用法: proxyd [选项] <命令>
   deploy           安装并启动全部服务（可重复执行以更新）
   client-config [用户]  输出客户端连接 URI（默认全部用户）
   status           查看服务状态和证书有效期
-  version          查看 proxyd、网关、sing-box 的版本，检查是否有新版本
-  logs <服务>      查看日志（gateway 或协议名）
-  restart [服务]   重启全部或指定服务
+  version          查看版本，检查是否有新版本
+  logs [协议]      查看日志（默认整个服务，指定协议时只看它的输出）
+  restart [协议]   重启整个服务或指定协议
   uninstall        停止并删除全部服务和安装目录
+
+run、reload、validate 等其余命令是 Caddy 自带的命令，由服务内部使用。
 
 选项:
 `
 
-func main() {
-	fs := flag.NewFlagSet("proxyd", flag.ExitOnError)
+// commands 是本包处理的命令，其余命令交给 Caddy
+var commands = map[string]bool{
+	"init-config": true, "plan": true, "deploy": true, "client-config": true, "status": true,
+	"version": true, "logs": true, "restart": true, "uninstall": true, "help": true,
+}
+
+// Handles 判断命令行是否由本包处理：没有参数、以选项开头或是本包的命令
+func Handles(args []string) bool {
+	return len(args) == 0 || strings.HasPrefix(args[0], "-") || commands[args[0]]
+}
+
+// Main 执行命令，出错时以非零状态退出
+func Main(argv []string) {
+	fs := flag.NewFlagSet("proxy-gateway", flag.ExitOnError)
 	cfgPath := fs.String("c", "deploy.yaml", "配置文件路径")
-	prefix := fs.String("prefix", "", "安装目录（默认 /opt/proxy-deploy，--user 时 ~/.local/proxy-deploy）")
+	prefix := fs.String("prefix", "", "安装目录（默认 /opt/proxy-gateway，--user 时 ~/.local/proxy-gateway）")
 	user := fs.Bool("user", false, "rootless 模式：使用 systemd --user，无需 root（只能使用 1024 以上端口）")
-	gatewayBin := fs.String("gateway-binary", "", "使用本地构建的网关（go build ./cmd/proxy-gateway）代替发布的预构建版本")
 	showConfig := fs.Bool("show-config", false, "plan 时输出生成的网关配置（Caddy JSON）")
 	lines := fs.Int("n", 50, "logs 显示的行数")
 	follow := fs.Bool("f", false, "logs 持续输出")
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage); fs.PrintDefaults() }
-	_ = fs.Parse(os.Args[1:])
+	_ = fs.Parse(argv)
 
 	args := fs.Args()
-	if len(args) == 0 {
+	if len(args) == 0 || args[0] == "help" {
 		fs.Usage()
 		os.Exit(2)
 	}
 	cmd := args[0]
-	// 允许把选项放在命令和参数后面，例如 proxyd logs anytls -f -n 100：
+	// 允许把选项放在命令和参数后面，例如 proxy-gateway logs anytls -f -n 100：
 	// flag 包遇到第一个非选项参数就停止，所以逐个取出参数后继续解析
 	var rest []string
 	for remaining := args[1:]; len(remaining) > 0; {
@@ -66,14 +80,14 @@ func main() {
 	defer stop()
 
 	layout := paths.New(*prefix, *user)
-	if err := run(ctx, cmd, rest, layout, *cfgPath, *gatewayBin, *showConfig, *lines, *follow); err != nil {
+	if err := run(ctx, cmd, rest, layout, *cfgPath, *showConfig, *lines, *follow); err != nil {
 		fmt.Fprintln(os.Stderr, "错误:", err)
 		os.Exit(1)
 	}
 }
 
 func run(ctx context.Context, cmd string, rest []string, layout *paths.Layout,
-	cfgPath, gatewayBin string, showConfig bool, lines int, follow bool) error {
+	cfgPath string, showConfig bool, lines int, follow bool) error {
 
 	logf := func(format string, a ...any) { fmt.Printf("==> "+format+"\n", a...) }
 
@@ -150,10 +164,11 @@ func run(ctx context.Context, cmd string, rest []string, layout *paths.Layout,
 		printVersions(orchestrator.New(nil, nil, layout).Versions(vctx))
 		return nil
 	case "logs":
-		if len(rest) == 0 {
-			return errors.New("用法: proxyd logs <gateway|协议名> [-n 行数] [-f]")
+		name := ""
+		if len(rest) > 0 {
+			name = rest[0]
 		}
-		return orchestrator.New(nil, nil, layout).Logs(ctx, rest[0], lines, follow)
+		return orchestrator.New(nil, nil, layout).Logs(ctx, name, lines, follow)
 	case "restart":
 		name := ""
 		if len(rest) > 0 {
@@ -193,7 +208,7 @@ func run(ctx context.Context, cmd string, rest []string, layout *paths.Layout,
 	case "deploy":
 		printPlan(plan)
 		fmt.Println()
-		if err := orch.Deploy(ctx, plan, gatewayBin, logf); err != nil {
+		if err := orch.Deploy(ctx, plan, logf); err != nil {
 			return err
 		}
 		fmt.Println("\n部署完成。客户端配置:")
@@ -236,7 +251,7 @@ func printUser(u orchestrator.UserStats) {
 }
 
 // short 返回提交哈希的前 7 位和提交日期
-func short(b caddy.Build) string {
+func short(b orchestrator.Build) string {
 	rev := b.Revision
 	if len(rev) > 7 {
 		rev = rev[:7]
@@ -252,56 +267,43 @@ func short(b caddy.Build) string {
 }
 
 func printVersions(v *orchestrator.Versions) {
-	// proxyd 本身：与仓库 main 分支比较
-	switch {
-	case v.ProxydErr != nil:
-		fmt.Printf("proxyd    未知：%v\n", v.ProxydErr)
-	default:
-		fmt.Printf("proxyd    %s\n", short(v.Proxyd))
+	// 当前程序：与仓库 main 分支比较
+	if v.SelfErr != nil {
+		fmt.Printf("当前程序  版本未知：%v\n", v.SelfErr)
+	} else {
+		fmt.Printf("当前程序  %s，Caddy %s，sing-box %s\n", short(v.Self), v.Self.Caddy, orchestrator.SingBoxPinned)
 	}
 	switch {
 	case v.MainErr != nil:
 		fmt.Printf("          无法检查新版本：%v\n", v.MainErr)
-	case v.ProxydErr != nil:
+	case v.SelfErr != nil:
 		fmt.Printf("          仓库 main 最新提交 %s\n", short(v.Main))
-	case v.Main.Revision == v.Proxyd.Revision:
+	case v.Main.Revision == v.Self.Revision:
 		fmt.Println("          ✓ 与仓库 main 一致")
-	case v.Proxyd.Time.After(v.Main.Time):
+	case v.Self.Time.After(v.Main.Time):
 		fmt.Printf("          本地提交，比仓库 main %s 新\n", short(v.Main))
 	default:
-		fmt.Printf("          ↑ 仓库 main 已更新到 %s，拉取后重新构建 proxyd\n", short(v.Main))
+		fmt.Printf("          ↑ 仓库 main 已更新到 %s，拉取后重新构建\n", short(v.Main))
 	}
 
-	// 网关：与发布的预构建版本比较，deploy 总是安装发布版本（除非指定 --gateway-binary）
-	if v.GatewayErr != nil {
-		fmt.Println("网关      未安装")
-	} else {
-		fmt.Printf("网关      proxy-gateway %s，基于 Caddy %s\n", short(*v.Gateway), v.Gateway.Caddy)
-		if v.LocalGateway {
-			fmt.Println("          用 --gateway-binary 安装的本地构建，deploy 不会自动更新")
-		}
-	}
+	// 已安装的程序：服务运行的就是它，deploy 时换成当前程序
 	switch {
-	case v.ReleaseErr != nil:
-		fmt.Printf("          无法检查发布版本：%v\n", v.ReleaseErr)
-	case v.GatewayErr != nil:
-		fmt.Printf("          发布版本 %s，deploy 时安装\n", short(*v.GatewayRelease))
-	case v.Gateway.Revision == v.GatewayRelease.Revision && !v.Gateway.Modified:
-		fmt.Println("          ✓ 与发布版本一致")
-	case v.Gateway.Modified || v.Gateway.Time.After(v.GatewayRelease.Time):
-		fmt.Printf("          本地构建；发布版本是 %s\n", short(*v.GatewayRelease))
+	case v.InstalledErr != nil:
+		fmt.Println("已安装    未安装")
+	case v.InstalledSame:
+		fmt.Println("已安装    ✓ 与当前程序相同")
 	default:
-		fmt.Printf("          ↑ 发布版本已更新到 %s，执行 deploy 升级（网关会重启）\n", short(*v.GatewayRelease))
+		fmt.Printf("已安装    %s，与当前程序不同，执行 deploy 更新（服务会重启）\n", short(v.Installed))
 	}
 
-	// sing-box：版本固定在 proxyd 中
-	if v.SingBoxErr != nil {
-		fmt.Printf("sing-box  未安装（proxyd 使用 %s）\n", orchestrator.SingBoxPinned)
-	} else {
+	// sing-box：版本固定在程序中
+	switch {
+	case v.SingBoxErr != nil:
+		fmt.Println("sing-box  未安装")
+	case v.SingBox != orchestrator.SingBoxPinned:
+		fmt.Printf("sing-box  %s，当前程序使用 %s，执行 deploy 更换\n", v.SingBox, orchestrator.SingBoxPinned)
+	default:
 		fmt.Printf("sing-box  %s\n", v.SingBox)
-		if v.SingBox != orchestrator.SingBoxPinned {
-			fmt.Printf("          当前 proxyd 使用 %s，执行 deploy 更换\n", orchestrator.SingBoxPinned)
-		}
 	}
 	switch {
 	case v.SingBoxUpErr != nil:
@@ -309,7 +311,7 @@ func printVersions(v *orchestrator.Versions) {
 	case v.SingBoxLatest == orchestrator.SingBoxPinned:
 		fmt.Println("          ✓ 已是上游最新正式版")
 	default:
-		fmt.Printf("          上游最新正式版是 %s；proxyd 固定使用 %s，升级需要更新 proxyd\n", v.SingBoxLatest, orchestrator.SingBoxPinned)
+		fmt.Printf("          上游最新正式版是 %s；程序固定使用 %s，升级需要更新 proxy-gateway\n", v.SingBoxLatest, orchestrator.SingBoxPinned)
 	}
 }
 

@@ -13,10 +13,10 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"github.com/jiayx/proxy-deploy/internal/config"
-	"github.com/jiayx/proxy-deploy/internal/protocol"
-	"github.com/jiayx/proxy-deploy/internal/protocol/singbox"
-	"github.com/jiayx/proxy-deploy/pkg/paths"
+	"github.com/jiayx/proxy-gateway/internal/config"
+	"github.com/jiayx/proxy-gateway/internal/protocol"
+	"github.com/jiayx/proxy-gateway/internal/protocol/singbox"
+	"github.com/jiayx/proxy-gateway/pkg/paths"
 )
 
 const (
@@ -69,7 +69,7 @@ func (a *Adapter) Validate(cfg *config.ProtocolConfig) error {
 	}
 	key, err := base64.StdEncoding.DecodeString(protocol.StringOption(cfg, "password"))
 	if err != nil || len(key) != n {
-		return fmt.Errorf("password（服务端密钥）必须是 %d 字节随机密钥的 base64 编码（%s；proxyd init-config 会生成）", n, m)
+		return fmt.Errorf("password（服务端密钥）必须是 %d 字节随机密钥的 base64 编码（%s；proxy-gateway init-config 会生成）", n, m)
 	}
 	return nil
 }

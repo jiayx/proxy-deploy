@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/jiayx/proxy-deploy/internal/config"
+	"github.com/jiayx/proxy-gateway/internal/config"
 )
 
 // Adapter 是每种代理协议的适配接口。
@@ -77,7 +77,7 @@ func (u User) Key(protocol string, n int) string {
 }
 
 func (u User) derive(info string, n int) []byte {
-	key, err := hkdf.Key(sha256.New, []byte(u.Secret), nil, "proxy-deploy/"+info, n)
+	key, err := hkdf.Key(sha256.New, []byte(u.Secret), nil, "proxy-gateway/"+info, n)
 	if err != nil {
 		panic(err) // 只会在长度超限时发生，这里的长度都很小
 	}

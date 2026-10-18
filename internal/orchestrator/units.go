@@ -27,7 +27,7 @@ func (o *Orchestrator) gatewayEnv() []string {
 func (o *Orchestrator) gatewayUnit() unitFile {
 	bin, cfg := o.layout.GatewayBin(), o.layout.GatewayConfig()
 	var b strings.Builder
-	fmt.Fprintf(&b, "[Unit]\nDescription=proxy-gateway (proxy-deploy entry gateway, website and protocol backends)\nAfter=network-online.target\nWants=network-online.target\n\n")
+	fmt.Fprintf(&b, "[Unit]\nDescription=proxy-gateway (proxy-gateway entry gateway, website and protocol backends)\nAfter=network-online.target\nWants=network-online.target\n\n")
 	fmt.Fprintf(&b, "[Service]\nType=notify\n")
 	fmt.Fprintf(&b, "ExecStart=%s\n", execLine([]string{bin, "run", "--config", cfg}))
 	fmt.Fprintf(&b, "ExecReload=%s\n", execLine([]string{bin, "reload", "--config", cfg, "--address", "unix/" + o.layout.GatewayAdminSocket()}))

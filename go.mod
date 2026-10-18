@@ -1,4 +1,4 @@
-module github.com/jiayx/proxy-deploy
+module github.com/jiayx/proxy-gateway
 
 go 1.27.1
 
