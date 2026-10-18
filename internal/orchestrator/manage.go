@@ -303,7 +303,7 @@ func (o *Orchestrator) Uninstall(ctx context.Context, logf Logf) error {
 		return err
 	}
 	if m.Container {
-		return errors.New("容器部署请用 docker compose down 停止，删除数据卷即可清除证书和流量统计")
+		return errors.New("容器部署的卸载在宿主机上进行：docker compose down -v（-v 同时删除证书和流量统计），再删除 /usr/local/bin/proxy-gateway（如果装了转发脚本）")
 	}
 	prefix := filepath.Clean(o.layout.Prefix)
 	home, _ := os.UserHomeDir()

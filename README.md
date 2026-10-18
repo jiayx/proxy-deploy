@@ -280,7 +280,14 @@ chmod 755 /usr/local/bin/proxy-gateway
 - 挂载 `deploy.yaml` 所在的目录，不要只挂载这一个文件：编辑器和 `sed -i` 保存时会换成新文件，单文件挂载仍指向旧文件，容器里看不到修改。
 - 使用 host 网络时，要反向代理其他容器里的网站，把那个容器的端口映射到本机回环地址（例如 `ports: ["127.0.0.1:8080:80"]`），在 `web` 中写 `upstream: 127.0.0.1:8080`。
 - 静态网站目录需要另外挂载进容器，`root` 写容器内的路径。
-- `restart`（不指定协议）和 `uninstall` 在容器里不可用，分别用 `docker restart` 和 `docker compose down`。
+- `restart`（不指定协议）和 `uninstall` 在容器里不可用，分别用 `docker restart` 和下面的卸载步骤。
+
+卸载容器部署（在 compose 文件所在目录执行）：
+
+```bash
+docker compose down -v                 # 停止并删除容器；-v 同时删除数据卷（证书和用户流量统计）
+rm -f /usr/local/bin/proxy-gateway     # 删除宿主机上的转发脚本
+```
 
 ## 程序安装与文件布局
 
