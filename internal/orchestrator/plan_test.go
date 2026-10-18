@@ -54,7 +54,7 @@ func TestPlanDefault(t *testing.T) {
 		t.Fatalf("want one TCP server on 443, got %+v", p.Caddy.TCPServers)
 	}
 	routes := p.Caddy.TCPServers[0].Routes
-	if len(routes) != 1 || routes[0].Name != "anytls" || routes[0].SNI != "anytls.example.com" || routes[0].Upstream != "127.0.0.1:20003" {
+	if len(routes) != 1 || routes[0].Name != "anytls" || routes[0].SNI != "push.example.com" || routes[0].Upstream != "127.0.0.1:20003" {
 		t.Fatalf("unexpected anytls route: %+v", routes)
 	}
 
@@ -63,7 +63,7 @@ func TestPlanDefault(t *testing.T) {
 		byName[s.Cfg.Name] = s
 	}
 	hy := byName["hysteria2"]
-	if !hy.ViaEntry || hy.Runtime.ListenAddr != "127.0.0.1:20002" || hy.Runtime.SiteURL != "http://127.0.0.1:20001" || hy.Runtime.Cert == nil || hy.Runtime.Cert.Name != "hysteria2.example.com" {
+	if !hy.ViaEntry || hy.Runtime.ListenAddr != "127.0.0.1:20002" || hy.Runtime.SiteURL != "http://127.0.0.1:20001" || hy.Runtime.Cert == nil || hy.Runtime.Cert.Name != "web.example.com" {
 		t.Fatalf("unexpected hysteria2 plan: %+v %+v", hy, hy.Runtime)
 	}
 	if byName["anytls"].Runtime.Cert != nil {
@@ -74,7 +74,7 @@ func TestPlanDefault(t *testing.T) {
 	for _, c := range p.Certs {
 		certs = append(certs, c.Name)
 	}
-	if got := strings.Join(certs, ","); got != "example.com,hysteria2.example.com,anytls.example.com" {
+	if got := strings.Join(certs, ","); got != "example.com,web.example.com,push.example.com" {
 		t.Fatalf("unexpected certs %s", got)
 	}
 
@@ -120,7 +120,7 @@ func TestPlanUDPThroughGateway(t *testing.T) {
 	for _, r := range p.Caddy.UDPServers[0].Routes {
 		routes = append(routes, r.Name+"="+r.SNI+"→"+r.Upstream)
 	}
-	want := "hysteria2=hysteria2.example.com→127.0.0.1:20002,tuic=tuic.example.com→127.0.0.1:20005"
+	want := "hysteria2=web.example.com→127.0.0.1:20002,tuic=assets.example.com→127.0.0.1:20005"
 	if got := strings.Join(routes, ","); got != want {
 		t.Fatalf("routes:\n got %s\nwant %s", got, want)
 	}
@@ -301,7 +301,7 @@ func TestClientConfigsPerUser(t *testing.T) {
 		t.Fatalf("want 2 links per user, got %+v", ccs)
 	}
 	alice := protocol.User{Name: "alice", Secret: "alice-secret-0123456789"}
-	want := "anytls://" + alice.Password("anytls") + "@example.com:443/?insecure=1&sni=anytls.example.com#anytls-alice"
+	want := "anytls://" + alice.Password("anytls") + "@example.com:443/?insecure=1&sni=push.example.com#anytls-alice"
 	if ccs[0].URI != want {
 		t.Fatalf("got %s, want %s", ccs[0].URI, want)
 	}
@@ -318,5 +318,54 @@ func TestClientConfigsPerUser(t *testing.T) {
 	}
 	if got := p.Services[0].Runtime.Users; len(got) != 2 || got[1].Name != "bob" {
 		t.Fatalf("runtime should carry all users: %+v", got)
+	}
+}
+
+// 默认 SNI 不含协议名，同一部署里互不相同，并随域名变化
+func TestDefaultSNI(t *testing.T) {
+	reg := builtin.Registry(paths.New(t.TempDir(), false))
+	for _, domain := range []string{"example.com", "us.ob.cx", "a.b.example.org"} {
+		seen := map[string]string{}
+		for _, name := range reg.Names() {
+			a, _ := reg.Get(name)
+			if _, ok := a.(protocol.LoopbackPorter); !ok {
+				continue
+			}
+			sni := defaultSNI(domain, a)
+			label, ok := strings.CutSuffix(sni, "."+domain)
+			if !ok || strings.Contains(label, ".") || strings.Contains(sni, name) {
+				t.Errorf("%s/%s: bad default SNI %s", domain, name, sni)
+			}
+			if other, dup := seen[sni]; dup {
+				t.Errorf("%s: %s and %s share %s", domain, other, name, sni)
+			}
+			seen[sni] = name
+			if p := a.(protocol.LoopbackPorter).LoopbackPort() - loopbackBase; p >= len(sniLabels) {
+				t.Errorf("%s: loopback offset %d exceeds the SNI label list", name, p)
+			}
+		}
+	}
+	a, _ := reg.Get("anytls")
+	if defaultSNI("example.com", a) == defaultSNI("example.org", a) && defaultSNI("example.com", a) == defaultSNI("example.net", a) {
+		t.Error("default SNI should depend on the domain")
+	}
+}
+
+// 配置了 DNS 验证时，协议 SNI 共用通配符证书，Hysteria2 读取的也是这张证书
+func TestPlanWildcardCert(t *testing.T) {
+	cfg := baseConfig(proto("anytls"), proto("hysteria2"), proto("tuic", func(p *config.ProtocolConfig) { p.SNI = "q.other.org" }))
+	cfg.Certificates = config.CertificateConfig{Provider: "letsencrypt", DNSProvider: "cloudflare", DNSConfig: map[string]string{"api_token": "x"}}
+	p := newOrch(t, cfg).Plan()
+	var certs []string
+	for _, c := range p.Certs {
+		certs = append(certs, c.Name)
+	}
+	if got := strings.Join(certs, ","); got != "example.com,*.example.com,q.other.org" {
+		t.Fatalf("certificates: %s", got)
+	}
+	for _, s := range p.Services {
+		if s.Cfg.Name == "hysteria2" && (s.Runtime.Cert == nil || s.Runtime.Cert.Name != "*.example.com" || !strings.Contains(s.Runtime.Cert.CertPath, "/wildcard_.example.com/wildcard_.example.com.crt")) {
+			t.Fatalf("hysteria2 should read the wildcard certificate: %+v", s.Runtime.Cert)
+		}
 	}
 }

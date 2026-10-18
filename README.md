@@ -20,14 +20,14 @@
 
 ```text
 公网 TCP/443 → 网关按 TLS SNI 分流
-               ├─ anytls.example.com    → 网关终结 TLS → 回环地址上的 AnyTLS（sing-box）
+               ├─ push.example.com      → 网关终结 TLS → 回环地址上的 AnyTLS（sing-box）
                ├─ www.microsoft.com     → 原样透传 → 回环地址上的 VLESS + Reality（sing-box，自己握手）
                └─ 其他 SNI / 非 TLS 流量 → 内部 HTTPS 网站（127.0.0.1:20000，附 PROXY protocol）
 
 公网 UDP/443 → 网关按 QUIC SNI 分流（解密 QUIC Initial 包取得 ClientHello）
-               ├─ hysteria2.example.com → 回环地址上的 Hysteria2（sing-box，读取网关管理的证书）
+               ├─ web.example.com       → 回环地址上的 Hysteria2（sing-box，读取网关管理的证书）
                │                          └─ 认证失败的请求 → 伪装网站（反代内部网站）
-               ├─ tuic.example.com      → 回环地址上的 TUIC（sing-box，读取网关管理的证书）
+               ├─ assets.example.com    → 回环地址上的 TUIC（sing-box，读取网关管理的证书）
                └─ 其他 SNI（如浏览器 HTTP/3）→ 内部网站的 HTTP/3（127.0.0.1:20000）
 
 公网 TCP/80  → HTTP 跳转 HTTPS / ACME HTTP-01 验证
@@ -64,7 +64,7 @@ go test ./...
 
 部署需要运行在有 `systemctl` 和 `journalctl` 的 Linux 主机上，系统级安装需要 root 权限。`init-config`、`plan`、`client-config` 在其他系统上也能运行。构建机与目标平台不同时，可在构建命令前指定 `GOOS=linux GOARCH=amd64` 或目标架构。
 
-使用默认公网证书配置前，需把 `example.com`、`anytls.example.com` 和 `hysteria2.example.com` 替换为自己的域名并解析到服务器；使用额外的网站 `host` 或自定义 SNI 时，也需要配置相应解析。放行 TCP/80、TCP/443 和 UDP/443，并确保公网 ACME 验证可达。修改监听端口不会自动配置防火墙或公网端口转发。
+使用默认公网证书配置前，需把 `example.com` 替换为自己的域名，并把它和 `*.<domain>`（各协议默认 SNI 都是它下一级的子域名，`plan` 会列出来）解析到服务器；使用额外的网站 `host` 或自定义 SNI 时，也需要配置相应解析。放行 TCP/80、TCP/443 和 UDP/443，并确保公网 ACME 验证可达。修改监听端口不会自动配置防火墙或公网端口转发。
 
 ```bash
 # 1. 生成带注释的配置（协议密码已随机生成），编辑域名和邮箱
@@ -126,7 +126,7 @@ web:
 | `entry.https_port` / `http_port` | 默认 `443` / `80`，两者必须不同 |
 | `protocols` | 以协议名为键，列出的协议即启用，当前可用 `anytls`、`hysteria2`、`vless-reality`、`tuic`、`ss2022`，也可以写简称 `hy2`、`reality`、`ss`（`users[].protocols` 中同样可用）。值可以为空，也可以写该协议的选项（见下） |
 | `protocols.<协议>.port` | 公网端口，默认使用 `entry.https_port`；`ss2022` 必填，且不能与入口端口或其他协议的端口相同 |
-| `protocols.<协议>.sni` | 默认 `<协议名>.<domain>`（`vless-reality` 默认 `www.microsoft.com`）；TCP 协议的 SNI 必须与主域名及网站 `host` 不同 |
+| `protocols.<协议>.sni` | 默认是主域名下一级的一个常见子域名（如 `api`、`cdn`、`static`），由域名和协议决定，同一部署里各不相同，名字里不含协议名，以免证书透明度日志暴露用途；`vless-reality` 默认 `www.microsoft.com`。TCP 协议的 SNI 必须与主域名及网站 `host` 不同 |
 | `users[].name` | 用户名，1–32 个字母、数字、`-`、`_`，不能重复；至少一个用户 |
 | `users[].secret` | 至少 16 个字符，不能重复。各协议的密码、UUID、密钥都由它推导，所以新增协议时每个用户自动拥有凭据；更换即作废该用户的全部旧凭据 |
 | `users[].traffic_limit` | 可选，每个周期的流量上限（上下行合计），如 `200GiB`、`500GB`；不填不限 |
@@ -162,7 +162,17 @@ Shadowsocks 没有 TLS 握手，网关无法按 SNI 分流，所以 `ss2022` 独
 | `acme` | 自定义 ACME 服务，必须填写 `ca`（ACME directory URL），`email` 可选 |
 | `internal` | 使用 Caddy 内部 CA，适合测试；不会自动安装根证书到系统信任库，生成的客户端 URI 带 `insecure=1` |
 
-ACME 配置还支持 `dns_provider` 和 `dns_config`，分别指定 Caddy DNS provider 名称及其配置字段。使用 DNS 验证时，需在 `cmd/proxy-gateway/main.go` 中加入对应 DNS provider 模块的 import 后自行构建，用构建出的程序执行 `deploy`；预构建的程序不含 DNS provider。
+ACME 配置还支持 `dns_provider` 和 `dns_config`，用 DNS 验证代替 HTTP 验证。程序内置 Cloudflare（Token 需要该域名的 DNS 编辑权限）：
+
+```yaml
+certificates:
+  provider: letsencrypt
+  dns_provider: cloudflare
+  dns_config:
+    api_token: "<Cloudflare API Token>"
+```
+
+使用 DNS 验证时，主域名下一级的协议 SNI 共用一张通配符证书 `*.<domain>`：每张公开签发的证书都会记录在证书透明度日志里，任何人都能查到，用通配符证书后日志里看不出用了哪些子域名。主域名和网站 `host` 仍各自申请证书。其他 DNS 服务商需要在 `cmd/proxy-gateway/main.go` 中加入对应模块的 import 后自行构建。
 
 ### 网站
 

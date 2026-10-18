@@ -4,6 +4,7 @@ package orchestrator
 
 import (
 	"fmt"
+	"hash/fnv"
 	"net"
 	"path/filepath"
 	"slices"
@@ -77,6 +78,27 @@ func (s *Service) networks() []string {
 	return []string{s.Network}
 }
 
+// sniLabels 是协议 SNI 默认使用的子域名：都是普通网站常见的名字，不暴露协议
+var sniLabels = []string{"api", "cdn", "static", "assets", "media", "img", "app", "edge",
+	"files", "data", "dl", "push", "gw", "s3", "web", "m"}
+
+// defaultSNI 返回协议的默认 SNI：把 sniLabels 按主域名打乱，每个协议取固定位置（由它固定的回环端口决定）上的名字。
+// 同一部署里各协议的名字互不相同，启用或停用其他协议不会改变它；不同域名的部署得到不同的组合
+func defaultSNI(domain string, a protocol.Adapter) string {
+	lp, ok := a.(protocol.LoopbackPorter)
+	if !ok {
+		return a.Name() + "." + domain
+	}
+	words := slices.Clone(sniLabels)
+	rank := func(w string) uint64 {
+		h := fnv.New64a()
+		h.Write([]byte(domain + "/" + w))
+		return h.Sum64()
+	}
+	sort.Slice(words, func(i, j int) bool { return rank(words[i]) < rank(words[j]) })
+	return words[(lp.LoopbackPort()-loopbackBase)%len(words)] + "." + domain
+}
+
 // loopbackAddr 返回经网关转发的协议后端的监听地址，端口由适配器固定声明
 func loopbackAddr(a protocol.Adapter) string {
 	lp, ok := a.(protocol.LoopbackPorter)
@@ -111,6 +133,16 @@ func (o *Orchestrator) Plan() *Plan {
 	}
 
 	issuer := issuerFrom(c.Certificates)
+	// 使用 DNS 验证时，主域名下一级的协议 SNI 共用一张通配符证书：
+	// 证书透明度日志里只出现 *.<domain>，看不出用了哪些子域名
+	certName := func(sni string) string {
+		if c.Certificates.DNSProvider != "" {
+			if label, ok := strings.CutSuffix(sni, "."+c.Domain); ok && label != "" && !strings.Contains(label, ".") {
+				return "*." + c.Domain
+			}
+		}
+		return sni
+	}
 	certNames := []string{c.Domain}
 	seenCert := map[string]bool{c.Domain: true}
 	addCert := func(name string) {
@@ -192,7 +224,7 @@ func (o *Orchestrator) Plan() *Plan {
 		}
 		sni := pc.SNI
 		if sni == "" {
-			sni = pc.Name + "." + c.Domain
+			sni = defaultSNI(c.Domain, a)
 			if d, ok := a.(protocol.SNIDefaulter); ok {
 				sni = d.DefaultSNI()
 			}
@@ -247,7 +279,7 @@ func (o *Orchestrator) Plan() *Plan {
 		}
 
 		if !passthrough { // 透传的协议自己处理 TLS，SNI 通常是别人的域名，不申请证书
-			addCert(sni)
+			addCert(certName(sni))
 		}
 		p.Services = append(p.Services, svc)
 	}
@@ -299,7 +331,7 @@ func (o *Orchestrator) Plan() *Plan {
 		svc.Runtime.SNI = svc.SNI
 		if cc, ok := svc.Adapter.(protocol.CertConsumer); ok && cc.NeedsCertificate() {
 			for i := range p.Certs {
-				if p.Certs[i].Name == svc.SNI {
+				if p.Certs[i].Name == certName(svc.SNI) {
 					svc.Runtime.Cert = &p.Certs[i]
 				}
 			}

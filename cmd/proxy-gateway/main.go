@@ -11,6 +11,8 @@ import (
 	caddycmd "github.com/caddyserver/caddy/v2/cmd"
 
 	_ "github.com/caddyserver/caddy/v2/modules/standard"
+	// Cloudflare DNS 验证：配置 dns_provider: cloudflare 时用来申请通配符证书
+	_ "github.com/caddy-dns/cloudflare"
 	_ "github.com/jiayx/proxy-gateway/gateway"
 	"github.com/jiayx/proxy-gateway/internal/cli"
 )

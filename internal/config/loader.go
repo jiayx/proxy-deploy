@@ -174,7 +174,7 @@ users:
 # 可以用简称：hy2 = hysteria2，reality = vless-reality，ss = ss2022
 protocols:
   hysteria2:                # UDP/QUIC，使用 UDP/<https_port>
-    # sni: hysteria2.example.com   # 默认 <协议名>.<domain>，需要解析到本机
+    # sni: cdn.example.com         # 默认是主域名下一级的常见子域名（plan 会列出），需要解析到本机
 
   anytls:                   # TCP，与网站共享 TCP/<https_port>，按 SNI 分流
 

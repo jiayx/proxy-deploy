@@ -38,7 +38,7 @@ jobs:
             CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -ldflags "-s -w" -o dist/proxy-gateway-linux-$arch ./cmd/proxy-gateway
           done
           mods=$(dist/proxy-gateway-linux-amd64 list-modules)
-          for m in proxy_gateway admin.api.proxy_gateway; do
+          for m in proxy_gateway admin.api.proxy_gateway dns.providers.cloudflare; do
             grep -qx "$m" <<<"$mods" || { echo "missing $m"; exit 1; }
           done
           cd dist && for f in *; do sha256sum "$f" > "$f.sha256"; done

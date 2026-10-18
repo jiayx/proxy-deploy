@@ -42,6 +42,7 @@ func (i Issuer) storageKey() string {
 
 // CertPaths 返回 Caddy 为 name 管理的证书和私钥路径
 func CertPaths(storageRoot string, iss Issuer, name string) (crt, key string) {
+	name = strings.ReplaceAll(name, "*", "wildcard_") // certmagic 存储通配符证书的方式
 	dir := fmt.Sprintf("%s/certificates/%s/%s", storageRoot, iss.storageKey(), name)
 	return dir + "/" + name + ".crt", dir + "/" + name + ".key"
 }
