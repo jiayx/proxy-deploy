@@ -50,6 +50,7 @@ func TestLoadErrors(t *testing.T) {
 		"duplicate protocol":     {"domain: a.com\ncertificates: {provider: internal}\n" + users + "protocols:\n  anytls:\n  anytls:\n", "duplicate"},
 		"protocol list":          {"domain: a.com\ncertificates: {provider: internal}\n" + users + "protocols: [anytls]\n", "mapping"},
 		"protocol bad port":      {"domain: a.com\ncertificates: {provider: internal}\n" + users + "protocols: {ss2022: {port: 0}}\n", "invalid port"},
+		"alias duplicate":        {"domain: a.com\ncertificates: {provider: internal}\n" + users + "protocols: {hy2: , hysteria2: }\n", "duplicate"},
 		"user unknown protocol":  {"domain: a.com\ncertificates: {provider: internal}\nusers: [{name: a, secret: 0123456789abcdef, protocols: [tuic]}]\nprotocols: {anytls: }\n", "not configured"},
 		"bad port":               {"domain: a.com\ncertificates: {provider: internal}\nentry: {https_port: 70000}\n" + users, "invalid port"},
 		"missing email":          {"domain: a.com\n", "email"},
@@ -89,6 +90,26 @@ certificates: {provider: internal}
 	}
 	if ps[2].Port != 8388 || ps[2].Options["password"] != "abc" || len(ps[2].Options) != 1 {
 		t.Fatalf("unexpected ss2022: %+v", ps[2])
+	}
+}
+
+func TestProtocolAliases(t *testing.T) {
+	cfg, err := Load(writeConfig(t, `domain: a.com
+certificates: {provider: internal}
+users: [{name: a, secret: 0123456789abcdef, protocols: [hy2, ss]}]
+protocols:
+  hy2:
+  reality: {private_key: k}
+  ss: {port: 8388}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(cfg.Protocols.Names(), ","); got != "hysteria2,vless-reality,ss2022" {
+		t.Fatalf("aliases should become full names: %s", got)
+	}
+	if got := strings.Join(cfg.Users[0].Protocols, ","); got != "hysteria2,ss2022" || !cfg.Users[0].Allows("ss2022") {
+		t.Fatalf("user protocols should use full names: %s", got)
 	}
 }
 

@@ -107,7 +107,7 @@ web:
 | `domain` | 必填，主域名和默认网站证书域名 |
 | `server.address` | 客户端实际连接地址，默认等于 `domain`，可填 IP；不改变用于 TLS 的 SNI |
 | `entry.https_port` / `http_port` | 默认 `443` / `80`，两者必须不同 |
-| `protocols` | 以协议名为键，列出的协议即启用，当前可用 `anytls`、`hysteria2`、`vless-reality`、`tuic`、`ss2022`。值可以为空，也可以写该协议的选项（见下） |
+| `protocols` | 以协议名为键，列出的协议即启用，当前可用 `anytls`、`hysteria2`、`vless-reality`、`tuic`、`ss2022`，也可以写简称 `hy2`、`reality`、`ss`（`users[].protocols` 中同样可用）。值可以为空，也可以写该协议的选项（见下） |
 | `protocols.<协议>.port` | 公网端口，默认使用 `entry.https_port`；`ss2022` 必填，且不能与入口端口或其他协议的端口相同 |
 | `protocols.<协议>.sni` | 默认 `<协议名>.<domain>`（`vless-reality` 默认 `www.microsoft.com`）；TCP 协议的 SNI 必须与主域名及网站 `host` 不同 |
 | `users[].name` | 用户名，1–32 个字母、数字、`-`、`_`，不能重复；至少一个用户 |

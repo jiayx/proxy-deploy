@@ -122,7 +122,9 @@ func (c *DeployConfig) Validate() error {
 	}
 
 	for i, u := range c.Users {
-		for _, name := range u.Protocols {
+		for j, name := range u.Protocols {
+			name = CanonicalProtocol(name)
+			u.Protocols[j] = name
 			if !slices.Contains(c.Protocols.Names(), name) {
 				return fmt.Errorf("users[%d] %s: protocol %q is not configured in protocols", i, u.Name, name)
 			}
@@ -172,6 +174,7 @@ users:
     # protocols: [anytls]      # 只开放部分协议，不填可用全部协议
 
 # 列出的协议即启用，选项直接写在协议名下面；不需要的协议删掉或注释掉
+# 可以用简称：hy2 = hysteria2，reality = vless-reality，ss = ss2022
 protocols:
   hysteria2:                # UDP/QUIC，使用 UDP/<https_port>
     # sni: hysteria2.example.com   # 默认 <协议名>.<domain>，需要解析到本机

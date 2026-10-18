@@ -14,6 +14,21 @@ import (
 //	  ss2022: {port: 8388, password: "..."}
 type Protocols []ProtocolConfig
 
+// protocolAliases 是协议的常用简称，配置中可以代替正式名称；其余地方（配置目录、路由、统计、链接名）一律用正式名称
+var protocolAliases = map[string]string{
+	"hy2":     "hysteria2",
+	"reality": "vless-reality",
+	"ss":      "ss2022",
+}
+
+// CanonicalProtocol 把简称换成正式的协议名
+func CanonicalProtocol(name string) string {
+	if full, ok := protocolAliases[name]; ok {
+		return full
+	}
+	return name
+}
+
 func (ps *Protocols) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind == yaml.ScalarNode && n.Tag == "!!null" {
 		return nil
@@ -24,11 +39,12 @@ func (ps *Protocols) UnmarshalYAML(n *yaml.Node) error {
 	seen := map[string]bool{}
 	for i := 0; i < len(n.Content); i += 2 {
 		k, v := n.Content[i], n.Content[i+1]
-		if seen[k.Value] {
-			return fmt.Errorf("line %d: duplicate protocol %q (each protocol can be configured once)", k.Line, k.Value)
+		name := CanonicalProtocol(k.Value)
+		if seen[name] {
+			return fmt.Errorf("line %d: duplicate protocol %q (each protocol can be configured once)", k.Line, name)
 		}
-		seen[k.Value] = true
-		p := ProtocolConfig{Name: k.Value, Options: map[string]any{}}
+		seen[name] = true
+		p := ProtocolConfig{Name: name, Options: map[string]any{}}
 		if !(v.Kind == yaml.ScalarNode && v.Tag == "!!null") {
 			if v.Kind != yaml.MappingNode {
 				return fmt.Errorf("line %d: protocols.%s must be empty or a mapping of options", v.Line, k.Value)
