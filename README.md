@@ -271,8 +271,10 @@ docker compose pull && docker compose up -d                 # 升级镜像（会
 卸载容器部署（在 compose 文件所在目录执行）：
 
 ```bash
-docker compose down -v      # 停止并删除容器；-v 同时删除数据卷（证书和用户流量统计）
+docker compose down         # 停止并删除容器；数据卷（证书和用户流量统计）保留
 ```
+
+确定不再需要证书和流量统计时，在上面的命令后加 `-v`，数据卷会一并删除，无法恢复。
 
 ## 程序安装与文件布局
 
