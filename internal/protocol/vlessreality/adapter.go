@@ -39,6 +39,7 @@ func New(layout *paths.Layout) *Adapter {
 func (a *Adapter) Name() string                  { return name }
 func (a *Adapter) LoopbackPort() int             { return 20004 }
 func (a *Adapter) Transport() protocol.Transport { return protocol.TransportTCP }
+func (a *Adapter) Options() []string             { return []string{"private_key", "short_id", "handshake"} }
 func (a *Adapter) PassthroughTLS() bool          { return true }
 func (a *Adapter) DefaultSNI() string            { return defaultSNI }
 func (a *Adapter) ConfigPath() string {
@@ -55,14 +56,14 @@ var shortIDPattern = regexp.MustCompile(`^([0-9a-f]{2}){0,8}$`)
 
 func (a *Adapter) Validate(cfg *config.ProtocolConfig) error {
 	if _, err := secrets.RealityPublicKey(protocol.StringOption(cfg, "private_key")); err != nil {
-		return fmt.Errorf("config.private_key：%v（proxyd init-config 会生成）", err)
+		return fmt.Errorf("private_key：%v（proxyd init-config 会生成）", err)
 	}
 	if !shortIDPattern.MatchString(protocol.StringOption(cfg, "short_id")) {
-		return fmt.Errorf("config.short_id 必须是 0 到 16 位偶数长度的小写十六进制")
+		return fmt.Errorf("short_id 必须是 0 到 16 位偶数长度的小写十六进制")
 	}
 	if hs := protocol.StringOption(cfg, "handshake"); hs != "" {
 		if _, _, err := net.SplitHostPort(hs); err != nil {
-			return fmt.Errorf("config.handshake 应为 host:port：%v", err)
+			return fmt.Errorf("handshake 应为 host:port：%v", err)
 		}
 	}
 	return nil

@@ -16,7 +16,7 @@ var (
 
 func TestGenerateConfig(t *testing.T) {
 	a := New(paths.New("/opt/pd", false))
-	cfg := &config.ProtocolConfig{Name: name, Config: map[string]any{}}
+	cfg := &config.ProtocolConfig{Name: name, Options: map[string]any{}}
 	rt := protocol.Runtime{
 		Users:      []protocol.User{alice, bob},
 		ListenAddr: ":443",
@@ -56,7 +56,7 @@ func TestGenerateConfig(t *testing.T) {
 		t.Fatalf("default masquerade should proxy the local site keeping Host: %s", data)
 	}
 
-	cfg.Config["masquerade_url"] = "https://www.bing.com"
+	cfg.Options["masquerade_url"] = "https://www.bing.com"
 	data, _ = a.GenerateConfig(cfg, rt)
 	json.Unmarshal(data, &out)
 	if m := out.Inbounds[0].Masquerade; m["url"] != "https://www.bing.com" || m["rewrite_host"] != true {

@@ -70,7 +70,7 @@
 
 ## 多用户与按用户统计
 
-- `deploy.yaml` 的 `users` 列出用户，每个用户只有名称和 `secret`；各协议凭据用 HKDF 从 `secret` 推导（信息串含协议名），新增协议无需新增字段，用户之间凭据不会重复。
+- `deploy.yaml` 的 `users` 列出用户，每个用户只有名称和 `secret`；各协议凭据用 HKDF 从 `secret` 推导（信息串含协议名），新增协议无需新增字段，用户之间凭据不会重复。用户可以用 `protocols` 限定可用的协议，未列入的协议不在其 sing-box 配置中生成该用户。
 - 用户认证在 sing-box 内部完成，网关从后端日志得知归属：同一连接 ID 下先有 `inbound connection from 127.0.0.1:<端口>`，再有 `[用户] inbound connection to …`（UDP 关联的 from 行直接带用户）。网关连接后端时登记 (后端名, tcp|udp, 本地端口) → 连接计数器，日志解析出用户后挂到该连接；每秒把增量计入用户，连接结束再结算一次。
 - QUIC 协议（hysteria2、tuic）的流共享一个 UDP 会话，归属同一用户；sing-box 对它们打印 `inbound connection`，所以非 packet 的行先按 TCP 再按 UDP 查找。
 - 用户统计进程级保存，持久化到 `usage_file`（每 30 秒及应用停止时，原子写入）。

@@ -25,7 +25,7 @@ func newOrch(t *testing.T, cfg *config.DeployConfig) *Orchestrator {
 }
 
 func proto(name string, extra ...func(*config.ProtocolConfig)) config.ProtocolConfig {
-	p := config.ProtocolConfig{Name: name, Enabled: true, Config: map[string]any{"password": "secret"}}
+	p := config.ProtocolConfig{Name: name, Options: map[string]any{}}
 	for _, f := range extra {
 		f(&p)
 	}
@@ -108,7 +108,7 @@ func TestPlanConflicts(t *testing.T) {
 }
 
 func TestPlanUDPThroughGateway(t *testing.T) {
-	tuicProto := proto("tuic", func(p *config.ProtocolConfig) { p.Config["uuid"] = secrets.UUID() })
+	tuicProto := proto("tuic")
 	p := newOrch(t, baseConfig(proto("hysteria2"), tuicProto)).Plan()
 	if len(p.Conflicts) != 0 {
 		t.Fatalf("UDP protocols should share the entry port, got %+v", p.Conflicts)
@@ -135,8 +135,8 @@ func TestPlanUDPGatewayWithoutUDPProtocols(t *testing.T) {
 
 func realityProto(extra ...func(*config.ProtocolConfig)) config.ProtocolConfig {
 	priv, _ := secrets.RealityKeyPair()
-	p := config.ProtocolConfig{Name: "vless-reality", Enabled: true, Config: map[string]any{
-		"uuid": secrets.UUID(), "private_key": priv, "short_id": secrets.ShortID()}}
+	p := config.ProtocolConfig{Name: "vless-reality", Options: map[string]any{
+		"private_key": priv, "short_id": secrets.ShortID()}}
 	for _, f := range extra {
 		f(&p)
 	}
@@ -187,7 +187,9 @@ func TestPlanLoopbackPortsStable(t *testing.T) {
 // 示例配置中的协议全部启用后应能直接部署：init-config 生成的凭据都能通过校验，端口不冲突
 func TestPlanExampleAllProtocols(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "deploy.yaml")
-	os.WriteFile(path, []byte(strings.ReplaceAll(config.Example(), "enabled: false", "enabled: true")), 0600)
+	example := config.Example()
+	i := strings.Index(example, "\nprotocols:")
+	os.WriteFile(path, []byte(example[:i]+strings.ReplaceAll(example[i:], "\n  # ", "\n  ")), 0600)
 	cfg, err := config.Load(path)
 	if err != nil {
 		t.Fatal(err)
@@ -204,7 +206,7 @@ func TestPlanExampleAllProtocols(t *testing.T) {
 
 func TestPlanDedicatedPort(t *testing.T) {
 	ss := func(port int) config.ProtocolConfig {
-		return config.ProtocolConfig{Name: "ss2022", Enabled: true, Port: port, Config: map[string]any{"password": secrets.Key(16)}}
+		return config.ProtocolConfig{Name: "ss2022", Port: port, Options: map[string]any{"password": secrets.Key(16)}}
 	}
 	p := newOrch(t, baseConfig(proto("anytls"), ss(8388))).Plan()
 	if len(p.Conflicts) != 0 {
@@ -239,10 +241,42 @@ func TestPlanDedicatedPort(t *testing.T) {
 	}
 }
 
-func TestPlanDisabledProtocolIgnored(t *testing.T) {
-	p := newOrch(t, baseConfig(proto("anytls", func(p *config.ProtocolConfig) { p.Enabled = false }))).Plan()
-	if len(p.Services) != 0 || len(p.Caddy.TCPServers[0].Routes) != 0 {
-		t.Fatalf("disabled protocol should not be planned: %+v", p.Services)
+func TestPlanNoProtocols(t *testing.T) {
+	p := newOrch(t, baseConfig()).Plan()
+	if len(p.Conflicts) > 0 || len(p.Services) != 0 || len(p.Caddy.TCPServers[0].Routes) != 0 {
+		t.Fatalf("without protocols the server is just the site: %+v %+v", p.Services, p.Conflicts)
+	}
+}
+
+func TestPlanUnknownOption(t *testing.T) {
+	p := newOrch(t, baseConfig(proto("tuic", func(p *config.ProtocolConfig) { p.Options["congestion"] = "bbr" }))).Plan()
+	if len(p.Conflicts) != 1 || !strings.Contains(p.Conflicts[0].Reason, "congestion") || !strings.Contains(p.Conflicts[0].Suggestion, "congestion_control") {
+		t.Fatalf("misspelled option should be reported: %+v", p.Conflicts)
+	}
+}
+
+func TestPlanUserProtocols(t *testing.T) {
+	cfg := baseConfig(proto("anytls"), proto("hysteria2"))
+	cfg.Users[1].Protocols = []string{"anytls"}
+	o := newOrch(t, cfg)
+	p := o.Plan()
+	if len(p.Conflicts) > 0 {
+		t.Fatalf("unexpected conflicts: %+v", p.Conflicts)
+	}
+	for _, s := range p.Services {
+		want := map[string]int{"anytls": 2, "hysteria2": 1}[s.Cfg.Name]
+		if len(s.Runtime.Users) != want {
+			t.Errorf("%s should serve %d users, got %+v", s.Cfg.Name, want, s.Runtime.Users)
+		}
+	}
+	bob, err := o.ClientConfigs(p, "bob")
+	if err != nil || len(bob) != 1 || bob[0].Protocol != "anytls" {
+		t.Fatalf("bob should only get anytls: %+v %v", bob, err)
+	}
+
+	cfg.Users[0].Protocols = []string{"anytls"}
+	if p := newOrch(t, cfg).Plan(); len(p.Conflicts) != 1 || !strings.Contains(p.Conflicts[0].Reason, "没有用户") {
+		t.Fatalf("protocol nobody can use should be reported: %+v", p.Conflicts)
 	}
 }
 

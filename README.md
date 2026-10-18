@@ -73,7 +73,7 @@ sudo ./proxyd status
 
 ## 配置
 
-`init-config` 输出的默认配置等价于（另有 `vless-reality`、`tuic`、`ss2022` 三个默认不启用的协议）：
+`init-config` 输出的默认配置等价于（`vless-reality`、`tuic`、`ss2022` 以注释形式给出，凭据已生成，取消注释即启用）：
 
 ```yaml
 domain: example.com
@@ -93,12 +93,9 @@ users:
   - name: default
     secret: "<随机生成>"
 
-protocols:
-  - name: hysteria2
-    enabled: true
-
-  - name: anytls
-    enabled: true
+protocols:                  # 列出即启用，不需要的删掉
+  hysteria2:
+  anytls:
 
 web:
   - name: site
@@ -110,31 +107,31 @@ web:
 | `domain` | 必填，主域名和默认网站证书域名 |
 | `server.address` | 客户端实际连接地址，默认等于 `domain`，可填 IP；不改变用于 TLS 的 SNI |
 | `entry.https_port` / `http_port` | 默认 `443` / `80`，两者必须不同 |
-| `protocols[].name` | 当前可用 `anytls`、`hysteria2`、`vless-reality`、`tuic`、`ss2022` |
-| `protocols[].enabled` | 只有显式设为 `true` 才启用 |
-| `protocols[].port` | 公网端口，默认使用 `entry.https_port`；`ss2022` 必填，且不能与入口端口或其他协议的端口相同 |
-| `protocols[].sni` | 默认 `<name>.<domain>`（`vless-reality` 默认 `www.microsoft.com`）；TCP 协议的 SNI 必须与主域名及网站 `host` 不同 |
+| `protocols` | 以协议名为键，列出的协议即启用，当前可用 `anytls`、`hysteria2`、`vless-reality`、`tuic`、`ss2022`。值可以为空，也可以写该协议的选项（见下） |
+| `protocols.<协议>.port` | 公网端口，默认使用 `entry.https_port`；`ss2022` 必填，且不能与入口端口或其他协议的端口相同 |
+| `protocols.<协议>.sni` | 默认 `<协议名>.<domain>`（`vless-reality` 默认 `www.microsoft.com`）；TCP 协议的 SNI 必须与主域名及网站 `host` 不同 |
 | `users[].name` | 用户名，1–32 个字母、数字、`-`、`_`，不能重复；至少一个用户 |
 | `users[].secret` | 至少 16 个字符，不能重复。各协议的密码、UUID、密钥都由它推导，所以新增协议时每个用户自动拥有凭据；更换即作废该用户的全部旧凭据 |
 | `users[].traffic_limit` | 可选，每个周期的流量上限（上下行合计），如 `200GiB`、`500GB`；不填不限 |
 | `users[].reset_day` | 可选，每月几号（1–28，服务器本地时间）重置周期用量，默认 1 |
 | `users[].expire` | 可选，到期日 `YYYY-MM-DD`，当天结束前可用 |
-| `anytls` 的 `config.padding_scheme` | 可选，填充方案，多行字符串或字符串列表，每行一条规则；格式同 sing-box anytls inbound |
-| `hysteria2` 的 `config.masquerade_url` | 可选，覆盖默认的内部伪装网站地址 |
-| `vless-reality` 的 `config.private_key` / `short_id` | 必填，`init-config` 会生成；公钥由私钥推导，出现在客户端链接中 |
-| `vless-reality` 的 `config.handshake` | 可选，伪装握手的目标 `host:port`，默认是 `sni` 的 443 端口 |
-| `tuic` 的 `config.congestion_control` | 可选，`bbr`（默认）、`cubic` 或 `new_reno` |
-| `ss2022` 的 `config.method` | 可选，`2022-blake3-aes-128-gcm`（默认）或 `2022-blake3-aes-256-gcm`；多用户（SIP022 EIH）只支持 AES |
-| `ss2022` 的 `config.password` | 必填，服务端密钥：随机密钥的 base64 编码，aes-128 为 16 字节、aes-256 为 32 字节；`init-config` 会生成。每个用户另有由 `secret` 推导的密钥，客户端密码为 `服务端密钥:用户密钥` |
+| `users[].protocols` | 可选，该用户可以使用的协议，如 `[anytls, hysteria2]`；不填可用全部协议。只有这些协议的服务端接受该用户，`client-config` 也只输出这些链接 |
+| `anytls` 的 `padding_scheme` | 可选，填充方案，多行字符串或字符串列表，每行一条规则；格式同 sing-box anytls inbound |
+| `hysteria2` 的 `masquerade_url` | 可选，覆盖默认的内部伪装网站地址 |
+| `vless-reality` 的 `private_key` / `short_id` | 必填，`init-config` 会生成；公钥由私钥推导，出现在客户端链接中 |
+| `vless-reality` 的 `handshake` | 可选，伪装握手的目标 `host:port`，默认是 `sni` 的 443 端口 |
+| `tuic` 的 `congestion_control` | 可选，`bbr`（默认）、`cubic` 或 `new_reno` |
+| `ss2022` 的 `method` | 可选，`2022-blake3-aes-128-gcm`（默认）或 `2022-blake3-aes-256-gcm`；多用户（SIP022 EIH）只支持 AES |
+| `ss2022` 的 `password` | 必填，服务端密钥：随机密钥的 base64 编码，aes-128 为 16 字节、aes-256 为 32 字节；`init-config` 会生成。每个用户另有由 `secret` 推导的密钥，客户端密码为 `服务端密钥:用户密钥` |
 
-每种协议只能配置一个实例（重复的 `name` 会被拒绝）：配置路径和后端进程都按协议名标识。配置中出现未知字段（例如拼错的字段名）时加载直接报错。
+每种协议只能配置一个实例：配置路径和后端进程都按协议名标识。配置中出现未知字段或协议不认识的选项（例如拼错的名字）时直接报错。
 
 ### VLESS + Reality
 
 Reality 自己完成 TLS 握手：客户端使用伪装目标网站的 SNI（默认 `www.microsoft.com`），网关按这个 SNI 把连接原样透传给 sing-box，不终结 TLS，也不为它申请证书。认证通过的连接被代理；未通过的连接（包括主动探测）由 sing-box 转给真正的目标网站，探测者拿到的是目标网站的真实证书和内容。
 
 - 伪装目标应选择离服务器近、支持 TLS 1.3 和 HTTP/2 的网站，并且服务器能访问到它；不要用本机网站的域名（规划时会报冲突）。
-- 示例配置中 `vless-reality` 默认不启用，改为 `enabled: true` 即可；凭据由 `init-config` 生成，重复部署保持不变。
+- 示例配置中 `vless-reality` 是注释掉的，取消注释即可启用；凭据由 `init-config` 生成，重复部署保持不变。
 
 ### Shadowsocks 2022
 

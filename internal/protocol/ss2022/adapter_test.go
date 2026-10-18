@@ -25,7 +25,7 @@ func TestValidate(t *testing.T) {
 		{"aes-256-gcm", "anything", false}, // 只支持 2022 加密方式
 	}
 	for _, c := range cases {
-		cfg := &config.ProtocolConfig{Config: map[string]any{"method": c.method, "password": c.password}}
+		cfg := &config.ProtocolConfig{Options: map[string]any{"method": c.method, "password": c.password}}
 		if err := a.Validate(cfg); (err == nil) != c.ok {
 			t.Errorf("method=%q: got err=%v, want ok=%v", c.method, err, c.ok)
 		}
@@ -40,7 +40,7 @@ var (
 func TestConfigs(t *testing.T) {
 	a := New(paths.New("/opt/pd", false))
 	key := secrets.Key(16)
-	cfg := &config.ProtocolConfig{Config: map[string]any{"password": key}}
+	cfg := &config.ProtocolConfig{Options: map[string]any{"password": key}}
 
 	data, _ := a.GenerateConfig(cfg, protocol.Runtime{ListenAddr: "127.0.0.1:20006", Users: []protocol.User{alice, bob}})
 	var out struct{ Inbounds []map[string]any }

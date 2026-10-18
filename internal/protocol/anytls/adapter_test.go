@@ -17,7 +17,7 @@ var (
 
 func TestGenerateConfig(t *testing.T) {
 	a := New(paths.New("/opt/pd", false))
-	cfg := &config.ProtocolConfig{Name: name, Config: map[string]any{"padding_scheme": "stop=8\n0=30-30\n"}}
+	cfg := &config.ProtocolConfig{Name: name, Options: map[string]any{"padding_scheme": "stop=8\n0=30-30\n"}}
 	if err := a.Validate(cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestGenerateConfig(t *testing.T) {
 		t.Fatalf("unexpected service args: %v", svc.Args)
 	}
 
-	cfg.Config["padding_scheme"] = 42
+	cfg.Options["padding_scheme"] = 42
 	if a.Validate(cfg) == nil {
 		t.Fatal("non-string padding_scheme should be rejected")
 	}

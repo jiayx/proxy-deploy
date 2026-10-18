@@ -41,6 +41,7 @@ func New(layout *paths.Layout) *Adapter {
 
 func (a *Adapter) Name() string                  { return name }
 func (a *Adapter) Transport() protocol.Transport { return protocol.TransportBoth }
+func (a *Adapter) Options() []string             { return []string{"method", "password"} }
 func (a *Adapter) NeedsDedicatedPort() bool      { return true }
 func (a *Adapter) LoopbackPort() int             { return 20006 }
 func (a *Adapter) ConfigPath() string {
@@ -64,11 +65,11 @@ func (a *Adapter) Validate(cfg *config.ProtocolConfig) error {
 	m := method(cfg)
 	n, ok := keyLengths[m]
 	if !ok {
-		return fmt.Errorf("config.method 只支持 2022-blake3-aes-128-gcm、2022-blake3-aes-256-gcm（多用户不支持 chacha20）")
+		return fmt.Errorf("method 只支持 2022-blake3-aes-128-gcm、2022-blake3-aes-256-gcm（多用户不支持 chacha20）")
 	}
 	key, err := base64.StdEncoding.DecodeString(protocol.StringOption(cfg, "password"))
 	if err != nil || len(key) != n {
-		return fmt.Errorf("config.password（服务端密钥）必须是 %d 字节随机密钥的 base64 编码（%s；proxyd init-config 会生成）", n, m)
+		return fmt.Errorf("password（服务端密钥）必须是 %d 字节随机密钥的 base64 编码（%s；proxyd init-config 会生成）", n, m)
 	}
 	return nil
 }
@@ -78,7 +79,7 @@ func userKey(cfg *config.ProtocolConfig, u protocol.User) string {
 	return u.Key(name, keyLengths[method(cfg)])
 }
 
-// GenerateConfig 使用多用户格式：config.password 是服务端密钥，每个用户另有自己的密钥
+// GenerateConfig 使用多用户格式：password 是服务端密钥，每个用户另有自己的密钥
 func (a *Adapter) GenerateConfig(cfg *config.ProtocolConfig, rt protocol.Runtime) ([]byte, error) {
 	var users []any
 	for _, u := range rt.Users {

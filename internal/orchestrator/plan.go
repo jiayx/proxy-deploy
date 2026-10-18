@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -160,12 +161,17 @@ func (o *Orchestrator) Plan() *Plan {
 
 	for i := range c.Protocols {
 		pc := &c.Protocols[i]
-		if !pc.Enabled {
-			continue
-		}
 		a, ok := o.registry.Get(pc.Name)
 		if !ok {
 			conflict(pc.Name, "未知协议", "目前支持 "+strings.Join(o.registry.Names(), ", "))
+			continue
+		}
+		if unknown := unknownOptions(pc, a); len(unknown) > 0 {
+			conflict(pc.Name, "未知选项 "+strings.Join(unknown, "、"), optionsHint(a))
+			continue
+		}
+		if !slices.ContainsFunc(c.Users, func(u config.UserConfig) bool { return u.Allows(pc.Name) }) {
+			conflict(pc.Name, "没有用户可以使用这个协议", "在用户的 protocols 中加上它，或从 protocols 中删除这个协议")
 			continue
 		}
 		if v, ok := a.(protocol.Validator); ok {
@@ -290,7 +296,7 @@ func (o *Orchestrator) Plan() *Plan {
 	}
 	for _, svc := range p.Services {
 		svc.Runtime.SiteURL = "http://" + sitePlainAddr
-		svc.Runtime.Users = users(c)
+		svc.Runtime.Users = users(c, svc.Cfg.Name)
 		svc.Runtime.SNI = svc.SNI
 		if cc, ok := svc.Adapter.(protocol.CertConsumer); ok && cc.NeedsCertificate() {
 			for i := range p.Certs {
@@ -352,19 +358,21 @@ func (o *Orchestrator) Plan() *Plan {
 	return p
 }
 
-// ClientConfigs 返回各协议的客户端连接信息
 // ClientConfigs 返回各用户在各协议下的客户端连接信息；user 非空时只返回该用户的
 func (o *Orchestrator) ClientConfigs(p *Plan, user string) ([]*config.ClientConfig, error) {
 	insecure := p.Caddy.Issuer.Kind == "internal"
 	var out []*config.ClientConfig
 	found := false
-	for _, u := range users(o.cfg) {
+	for _, u := range o.cfg.Users {
 		if user != "" && u.Name != user {
 			continue
 		}
 		found = true
 		for _, s := range p.Services {
-			cc, err := o.clientConfig(s, u, insecure)
+			if !u.Allows(s.Cfg.Name) {
+				continue
+			}
+			cc, err := o.clientConfig(s, protocol.User{Name: u.Name, Secret: u.Secret}, insecure)
 			if err != nil {
 				return nil, err
 			}
@@ -409,13 +417,34 @@ func userPolicies(c *config.DeployConfig) []caddy.UserPolicy {
 	return out
 }
 
-// users 把配置中的用户转换为适配器使用的形式
-func users(c *config.DeployConfig) []protocol.User {
-	out := make([]protocol.User, 0, len(c.Users))
+// users 返回可以使用某协议的用户，转换为适配器使用的形式
+func users(c *config.DeployConfig, protocolName string) []protocol.User {
+	var out []protocol.User
 	for _, u := range c.Users {
-		out = append(out, protocol.User{Name: u.Name, Secret: u.Secret})
+		if u.Allows(protocolName) {
+			out = append(out, protocol.User{Name: u.Name, Secret: u.Secret})
+		}
 	}
 	return out
+}
+
+// unknownOptions 返回协议不认识的选项名（通常是拼错了）
+func unknownOptions(pc *config.ProtocolConfig, a protocol.Adapter) []string {
+	var out []string
+	for k := range pc.Options {
+		if !slices.Contains(a.Options(), k) {
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func optionsHint(a protocol.Adapter) string {
+	if len(a.Options()) == 0 {
+		return a.Name() + " 只支持 port、sni"
+	}
+	return a.Name() + " 支持 port、sni、" + strings.Join(a.Options(), "、")
 }
 
 // checkPortFree 尝试绑定地址，判断是否被其他进程占用

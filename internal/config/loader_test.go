@@ -25,14 +25,8 @@ func TestExampleLoads(t *testing.T) {
 	if cfg.Server.Address != "example.com" || cfg.Entry.HTTPSPort != 443 || cfg.Entry.HTTPPort != 80 {
 		t.Fatalf("unexpected defaults: %+v", cfg)
 	}
-	var enabled []string
-	for _, p := range cfg.Protocols {
-		if p.Enabled {
-			enabled = append(enabled, p.Name)
-		}
-	}
-	if len(cfg.Protocols) != 5 || strings.Join(enabled, ",") != "hysteria2,anytls" {
-		t.Fatalf("want 5 protocols with hysteria2 and anytls enabled, got %+v", cfg.Protocols)
+	if strings.Join(cfg.Protocols.Names(), ",") != "hysteria2,anytls" {
+		t.Fatalf("want hysteria2 and anytls enabled, got %+v", cfg.Protocols)
 	}
 	if len(cfg.Users) != 1 || cfg.Users[0].Name != "default" || len(cfg.Users[0].Secret) < 16 {
 		t.Fatalf("example should have one default user with a generated secret: %+v", cfg.Users)
@@ -47,18 +41,16 @@ const users = "users: [{name: alice, secret: alice-secret-0123456789}]\n"
 
 func TestLoadErrors(t *testing.T) {
 	cases := map[string]struct{ yaml, want string }{
-		"no users":         {"domain: a.com\ncertificates: {provider: internal}\n", "at least one user"},
-		"bad user name":    {"domain: a.com\ncertificates: {provider: internal}\nusers: [{name: 'a b', secret: 0123456789abcdef}]\n", "name"},
-		"short secret":     {"domain: a.com\ncertificates: {provider: internal}\nusers: [{name: a, secret: short}]\n", "secret"},
-		"duplicate user":   {"domain: a.com\ncertificates: {provider: internal}\nusers: [{name: a, secret: 0123456789abcdef}, {name: a, secret: fedcba9876543210}]\n", "duplicate"},
-		"duplicate secret": {"domain: a.com\ncertificates: {provider: internal}\nusers: [{name: a, secret: 0123456789abcdef}, {name: b, secret: 0123456789abcdef}]\n", "duplicate"},
-		"unknown field":    {"domain: a.com\ncertificates: {provider: internal}\nentyr: {}\n", "entyr"},
-		"duplicate protocol": {`domain: a.com
-certificates: {provider: internal}
-` + users + `protocols:
-  - {name: anytls}
-  - {name: anytls}
-`, "duplicate"},
+		"no users":               {"domain: a.com\ncertificates: {provider: internal}\n", "at least one user"},
+		"bad user name":          {"domain: a.com\ncertificates: {provider: internal}\nusers: [{name: 'a b', secret: 0123456789abcdef}]\n", "name"},
+		"short secret":           {"domain: a.com\ncertificates: {provider: internal}\nusers: [{name: a, secret: short}]\n", "secret"},
+		"duplicate user":         {"domain: a.com\ncertificates: {provider: internal}\nusers: [{name: a, secret: 0123456789abcdef}, {name: a, secret: fedcba9876543210}]\n", "duplicate"},
+		"duplicate secret":       {"domain: a.com\ncertificates: {provider: internal}\nusers: [{name: a, secret: 0123456789abcdef}, {name: b, secret: 0123456789abcdef}]\n", "duplicate"},
+		"unknown field":          {"domain: a.com\ncertificates: {provider: internal}\nentyr: {}\n", "entyr"},
+		"duplicate protocol":     {"domain: a.com\ncertificates: {provider: internal}\n" + users + "protocols:\n  anytls:\n  anytls:\n", "duplicate"},
+		"protocol list":          {"domain: a.com\ncertificates: {provider: internal}\n" + users + "protocols: [anytls]\n", "mapping"},
+		"protocol bad port":      {"domain: a.com\ncertificates: {provider: internal}\n" + users + "protocols: {ss2022: {port: 0}}\n", "invalid port"},
+		"user unknown protocol":  {"domain: a.com\ncertificates: {provider: internal}\nusers: [{name: a, secret: 0123456789abcdef, protocols: [tuic]}]\nprotocols: {anytls: }\n", "not configured"},
 		"bad port":               {"domain: a.com\ncertificates: {provider: internal}\nentry: {https_port: 70000}\n" + users, "invalid port"},
 		"missing email":          {"domain: a.com\n", "email"},
 		"missing domain":         {"certificates: {provider: internal}\n", "domain"},
@@ -72,6 +64,31 @@ certificates: {provider: internal}
 				t.Fatalf("want error containing %q, got %v", c.want, err)
 			}
 		})
+	}
+}
+
+func TestLoadProtocols(t *testing.T) {
+	cfg, err := Load(writeConfig(t, `domain: a.com
+certificates: {provider: internal}
+`+users+`protocols:
+  tuic:
+  anytls: {sni: proxy.a.com}
+  ss2022:
+    port: 8388
+    password: abc
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps := cfg.Protocols
+	if strings.Join(ps.Names(), ",") != "tuic,anytls,ss2022" {
+		t.Fatalf("protocols should keep their order: %v", ps.Names())
+	}
+	if ps[1].SNI != "proxy.a.com" || len(ps[1].Options) != 0 {
+		t.Fatalf("sni should not stay in options: %+v", ps[1])
+	}
+	if ps[2].Port != 8388 || ps[2].Options["password"] != "abc" || len(ps[2].Options) != 1 {
+		t.Fatalf("unexpected ss2022: %+v", ps[2])
 	}
 }
 

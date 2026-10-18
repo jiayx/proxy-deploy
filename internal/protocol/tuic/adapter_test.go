@@ -16,7 +16,7 @@ var (
 )
 
 func newConfig() *config.ProtocolConfig {
-	return &config.ProtocolConfig{Name: name, Config: map[string]any{}}
+	return &config.ProtocolConfig{Name: name, Options: map[string]any{}}
 }
 
 func TestValidate(t *testing.T) {
@@ -25,7 +25,7 @@ func TestValidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := newConfig()
-	c.Config["congestion_control"] = "vegas"
+	c.Options["congestion_control"] = "vegas"
 	if a.Validate(c) == nil {
 		t.Error("unknown congestion control should be rejected")
 	}

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"time"
 
@@ -120,17 +121,11 @@ func (c *DeployConfig) Validate() error {
 		names[u.Name], secrets[u.Secret] = true, true
 	}
 
-	seen := map[string]bool{}
-	for i, p := range c.Protocols {
-		if p.Name == "" {
-			return fmt.Errorf("protocols[%d]: name is required", i)
-		}
-		if seen[p.Name] {
-			return fmt.Errorf("protocols[%d]: duplicate protocol %q (each protocol can be configured once)", i, p.Name)
-		}
-		seen[p.Name] = true
-		if p.Port < 0 || p.Port > 65535 {
-			return fmt.Errorf("protocols[%d]: invalid port %d", i, p.Port)
+	for i, u := range c.Users {
+		for _, name := range u.Protocols {
+			if !slices.Contains(c.Protocols.Names(), name) {
+				return fmt.Errorf("users[%d] %s: protocol %q is not configured in protocols", i, u.Name, name)
+			}
 		}
 	}
 	for i, w := range c.Web {
@@ -164,7 +159,7 @@ certificates:
   email: admin@example.com
 
 entry:
-  https_port: 443           # TCP 入口，Caddy l4 按 SNI 分流
+  https_port: 443           # TCP/UDP 入口，网关按 SNI 分流
   http_port: 80             # HTTP 跳转与 ACME HTTP-01 验证
 
 # 用户：各协议的密码、UUID、密钥都由 secret 推导，客户端链接按用户输出（proxyd client-config <用户>）
@@ -174,34 +169,28 @@ users:
     # traffic_limit: 200GiB    # 每个周期的流量上限（上下行合计），不填不限
     # reset_day: 1             # 每月几号重置流量（1-28），默认 1
     # expire: 2027-01-31       # 到期日，当天结束前可用，不填不过期
+    # protocols: [anytls]      # 只开放部分协议，不填可用全部协议
 
+# 列出的协议即启用，选项直接写在协议名下面；不需要的协议删掉或注释掉
 protocols:
-  - name: hysteria2         # UDP/QUIC，默认使用 UDP/<https_port>
-    enabled: true
-    # sni: hysteria2.example.com   # 默认 <name>.<domain>，需要解析到本机
+  hysteria2:                # UDP/QUIC，使用 UDP/<https_port>
+    # sni: hysteria2.example.com   # 默认 <协议名>.<domain>，需要解析到本机
 
-  - name: anytls            # TCP，与网站共享 TCP/<https_port>，按 SNI 分流
-    enabled: true
+  anytls:                   # TCP，与网站共享 TCP/<https_port>，按 SNI 分流
 
-  - name: vless-reality     # TCP，与网站共享 TCP/<https_port>；网关按 SNI 原样透传，Reality 自己握手
-    enabled: false
-    # sni: www.microsoft.com       # 伪装目标网站，默认 www.microsoft.com；建议换成离服务器近、支持 TLS 1.3 的网站
-    config:
-      private_key: "%s"     # 公钥由它推导，客户端链接里会给出
-      short_id: "%s"
-      # handshake: www.microsoft.com:443   # 伪装握手的目标，默认是 sni 的 443 端口
+  # vless-reality:          # TCP，与网站共享 TCP/<https_port>；网关按 SNI 原样透传，Reality 自己握手
+  #   private_key: "%s"     # 公钥由它推导，客户端链接里会给出
+  #   short_id: "%s"
+  #   # sni: www.microsoft.com     # 伪装目标网站，默认 www.microsoft.com；建议换成离服务器近、支持 TLS 1.3 的网站
+  #   # handshake: www.microsoft.com:443   # 伪装握手的目标，默认是 sni 的 443 端口
 
-  - name: tuic              # UDP/QUIC，与 hysteria2 共享 UDP/<https_port>，网关按 QUIC SNI 分流
-    enabled: false
-    # config:
-    #   congestion_control: bbr        # bbr | cubic | new_reno
+  # tuic:                   # UDP/QUIC，与 hysteria2 共享 UDP/<https_port>，网关按 QUIC SNI 分流
+  #   # congestion_control: bbr    # bbr | cubic | new_reno
 
-  - name: ss2022            # Shadowsocks 2022，没有 TLS，独占单独的端口（TCP 和 UDP，网关不识别直接转发）
-    enabled: false
-    port: 8388              # 必填，不能与入口端口相同；需在防火墙放行 TCP 和 UDP
-    config:
-      # method: 2022-blake3-aes-128-gcm   # 或 2022-blake3-aes-256-gcm（密钥 32 字节）
-      password: "%s"        # 服务端密钥；每个用户另有由 secret 推导的密钥
+  # ss2022:                 # Shadowsocks 2022，没有 TLS，独占单独的端口（TCP 和 UDP，网关不识别直接转发）
+  #   port: 8388            # 必填，不能与入口端口相同；需在防火墙放行 TCP 和 UDP
+  #   password: "%s"        # 服务端密钥；每个用户另有由 secret 推导的密钥
+  #   # method: 2022-blake3-aes-128-gcm   # 或 2022-blake3-aes-256-gcm（密钥 32 字节）
 
 web:
   - name: site

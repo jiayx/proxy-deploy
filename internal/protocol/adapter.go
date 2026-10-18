@@ -22,6 +22,9 @@ type Adapter interface {
 	// Transport 返回传输层类型，决定入口如何规划
 	Transport() Transport
 
+	// Options 返回 deploy.yaml 中该协议可用的选项名（port、sni 之外），用来发现拼错的选项
+	Options() []string
+
 	// Install 下载并安装协议二进制，幂等
 	Install(ctx context.Context) error
 
@@ -44,7 +47,7 @@ type Runtime struct {
 	SNI        string              // 客户端使用的 SNI
 	Cert       *config.Certificate // 统一管理的证书；仅 CertConsumer 会拿到
 	SiteURL    string              // 内部网站的明文 HTTP 地址（回环），可用于伪装或回落
-	Users      []User              // 全部用户，服务端配置为每个用户生成凭据
+	Users      []User              // 可以使用该协议的用户，服务端配置为每个用户生成凭据
 }
 
 // User 是一个用户。各协议的凭据都由 Secret 推导（推导时带上协议名，互不相同），
@@ -162,9 +165,9 @@ func (t Transport) String() string {
 // LinkName 返回客户端链接的显示名，例如 anytls-alice
 func LinkName(protocol string, u User) string { return protocol + "-" + u.Name }
 
-// StringOption 读取协议配置中的字符串选项
+// StringOption 读取协议的字符串选项
 func StringOption(cfg *config.ProtocolConfig, key string) string {
-	s, _ := cfg.Config[key].(string)
+	s, _ := cfg.Options[key].(string)
 	return s
 }
 

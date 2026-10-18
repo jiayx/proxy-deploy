@@ -1,6 +1,9 @@
 package config
 
-import "time"
+import (
+	"slices"
+	"time"
+)
 
 // DeployConfig 是整个部署的配置（deploy.yaml）
 type DeployConfig struct {
@@ -9,7 +12,7 @@ type DeployConfig struct {
 	Certificates CertificateConfig `yaml:"certificates"`
 	Entry        EntryConfig       `yaml:"entry"`
 	Users        []UserConfig      `yaml:"users"`
-	Protocols    []ProtocolConfig  `yaml:"protocols"`
+	Protocols    Protocols         `yaml:"protocols"`
 	Web          []WebConfig       `yaml:"web"`
 }
 
@@ -44,6 +47,13 @@ type UserConfig struct {
 	ResetDay int `yaml:"reset_day,omitempty"`
 	// Expire 是到期日（YYYY-MM-DD），当天结束前可用；为空表示不过期
 	Expire string `yaml:"expire,omitempty"`
+	// Protocols 是该用户可以使用的协议；为空表示全部已配置的协议
+	Protocols []string `yaml:"protocols,omitempty"`
+}
+
+// Allows 判断用户能否使用某个协议
+func (u UserConfig) Allows(protocol string) bool {
+	return len(u.Protocols) == 0 || slices.Contains(u.Protocols, protocol)
 }
 
 // LimitBytes 返回流量上限的字节数，0 表示不限；配置已通过校验
@@ -61,13 +71,12 @@ func (u UserConfig) ExpireAt() time.Time {
 	return d.AddDate(0, 0, 1)
 }
 
-// ProtocolConfig 协议配置
+// ProtocolConfig 是一个启用的协议。deploy.yaml 中以协议名为键，port、sni 以外的键都是协议自己的选项
 type ProtocolConfig struct {
-	Name    string         `yaml:"name"`
-	Enabled bool           `yaml:"enabled"`
-	Port    int            `yaml:"port,omitempty"` // 公网端口，默认 entry.https_port
-	SNI     string         `yaml:"sni,omitempty"`  // 默认 <name>.<domain>
-	Config  map[string]any `yaml:"config"`         // 协议特定配置
+	Name    string
+	Port    int            // 公网端口，默认 entry.https_port
+	SNI     string         // 默认 <name>.<domain>
+	Options map[string]any // 协议特定选项
 }
 
 // WebConfig 网站配置

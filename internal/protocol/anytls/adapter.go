@@ -34,6 +34,7 @@ func New(layout *paths.Layout) *Adapter {
 func (a *Adapter) Name() string                  { return name }
 func (a *Adapter) LoopbackPort() int             { return 20003 }
 func (a *Adapter) Transport() protocol.Transport { return protocol.TransportTCP }
+func (a *Adapter) Options() []string             { return []string{"padding_scheme"} }
 func (a *Adapter) ConfigPath() string {
 	return filepath.Join(a.layout.ProtocolDir(name), "config.json")
 }
@@ -45,7 +46,7 @@ func (a *Adapter) Validate(cfg *config.ProtocolConfig) error {
 
 // paddingScheme 读取可选的 padding_scheme：多行字符串或字符串列表，每行一条规则
 func paddingScheme(cfg *config.ProtocolConfig) ([]string, error) {
-	switch v := cfg.Config["padding_scheme"].(type) {
+	switch v := cfg.Options["padding_scheme"].(type) {
 	case nil:
 		return nil, nil
 	case string:
@@ -55,13 +56,13 @@ func paddingScheme(cfg *config.ProtocolConfig) ([]string, error) {
 		for _, item := range v {
 			s, ok := item.(string)
 			if !ok {
-				return nil, fmt.Errorf("config.padding_scheme 只能包含字符串")
+				return nil, fmt.Errorf("padding_scheme 只能包含字符串")
 			}
 			lines = append(lines, s)
 		}
 		return lines, nil
 	}
-	return nil, fmt.Errorf("config.padding_scheme 应为字符串或字符串列表")
+	return nil, fmt.Errorf("padding_scheme 应为字符串或字符串列表")
 }
 
 func (a *Adapter) Install(ctx context.Context) error { return singbox.Install(ctx, a.layout) }
