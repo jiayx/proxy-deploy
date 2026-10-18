@@ -3,8 +3,9 @@
 package orchestrator
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
-	"hash/fnv"
 	"net"
 	"path/filepath"
 	"slices"
@@ -91,9 +92,8 @@ func defaultSNI(domain string, a protocol.Adapter) string {
 	}
 	words := slices.Clone(sniLabels)
 	rank := func(w string) uint64 {
-		h := fnv.New64a()
-		h.Write([]byte(domain + "/" + w))
-		return h.Sum64()
+		sum := sha256.Sum256([]byte(domain + "/" + w))
+		return binary.BigEndian.Uint64(sum[:8])
 	}
 	sort.Slice(words, func(i, j int) bool { return rank(words[i]) < rank(words[j]) })
 	return words[(lp.LoopbackPort()-loopbackBase)%len(words)] + "." + domain

@@ -41,7 +41,7 @@
       "tcp_443": {
         "listen": [":443"],
         "routes": [
-          {"name": "anytls", "sni": ["push.example.com"], "tls": "terminate", "upstream": "127.0.0.1:20002"}
+          {"name": "anytls", "sni": ["edge.example.com"], "tls": "terminate", "upstream": "127.0.0.1:20002"}
         ],
         "fallback": {"name": "site", "tls": "passthrough", "upstream": "127.0.0.1:20000", "proxy_protocol": true}
       }
@@ -83,7 +83,7 @@
 "backends": {
   "hysteria2": {
     "command": ["/opt/proxy-gateway/bin/sing-box", "run", "--disable-color", "-c", "/opt/proxy-gateway/etc/hysteria2/config.json"],
-    "require_files": ["…/web.example.com.crt", "…/web.example.com.key"],
+    "require_files": ["…/data.example.com.crt", "…/data.example.com.key"],
     "revision": "3f2a9c…"
   }
 }

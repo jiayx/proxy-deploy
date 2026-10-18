@@ -54,7 +54,7 @@ func TestPlanDefault(t *testing.T) {
 		t.Fatalf("want one TCP server on 443, got %+v", p.Caddy.TCPServers)
 	}
 	routes := p.Caddy.TCPServers[0].Routes
-	if len(routes) != 1 || routes[0].Name != "anytls" || routes[0].SNI != "push.example.com" || routes[0].Upstream != "127.0.0.1:20003" {
+	if len(routes) != 1 || routes[0].Name != "anytls" || routes[0].SNI != "edge.example.com" || routes[0].Upstream != "127.0.0.1:20003" {
 		t.Fatalf("unexpected anytls route: %+v", routes)
 	}
 
@@ -63,7 +63,7 @@ func TestPlanDefault(t *testing.T) {
 		byName[s.Cfg.Name] = s
 	}
 	hy := byName["hysteria2"]
-	if !hy.ViaEntry || hy.Runtime.ListenAddr != "127.0.0.1:20002" || hy.Runtime.SiteURL != "http://127.0.0.1:20001" || hy.Runtime.Cert == nil || hy.Runtime.Cert.Name != "web.example.com" {
+	if !hy.ViaEntry || hy.Runtime.ListenAddr != "127.0.0.1:20002" || hy.Runtime.SiteURL != "http://127.0.0.1:20001" || hy.Runtime.Cert == nil || hy.Runtime.Cert.Name != "data.example.com" {
 		t.Fatalf("unexpected hysteria2 plan: %+v %+v", hy, hy.Runtime)
 	}
 	if byName["anytls"].Runtime.Cert != nil {
@@ -74,7 +74,7 @@ func TestPlanDefault(t *testing.T) {
 	for _, c := range p.Certs {
 		certs = append(certs, c.Name)
 	}
-	if got := strings.Join(certs, ","); got != "example.com,web.example.com,push.example.com" {
+	if got := strings.Join(certs, ","); got != "example.com,data.example.com,edge.example.com" {
 		t.Fatalf("unexpected certs %s", got)
 	}
 
@@ -120,7 +120,7 @@ func TestPlanUDPThroughGateway(t *testing.T) {
 	for _, r := range p.Caddy.UDPServers[0].Routes {
 		routes = append(routes, r.Name+"="+r.SNI+"→"+r.Upstream)
 	}
-	want := "hysteria2=web.example.com→127.0.0.1:20002,tuic=assets.example.com→127.0.0.1:20005"
+	want := "hysteria2=data.example.com→127.0.0.1:20002,tuic=gw.example.com→127.0.0.1:20005"
 	if got := strings.Join(routes, ","); got != want {
 		t.Fatalf("routes:\n got %s\nwant %s", got, want)
 	}
@@ -301,7 +301,7 @@ func TestClientConfigsPerUser(t *testing.T) {
 		t.Fatalf("want 2 links per user, got %+v", ccs)
 	}
 	alice := protocol.User{Name: "alice", Secret: "alice-secret-0123456789"}
-	want := "anytls://" + alice.Password("anytls") + "@example.com:443/?insecure=1&sni=push.example.com#anytls-alice"
+	want := "anytls://" + alice.Password("anytls") + "@example.com:443/?insecure=1&sni=edge.example.com#anytls-alice"
 	if ccs[0].URI != want {
 		t.Fatalf("got %s, want %s", ccs[0].URI, want)
 	}

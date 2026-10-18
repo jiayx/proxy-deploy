@@ -20,14 +20,14 @@
 
 ```text
 公网 TCP/443 → 网关按 TLS SNI 分流
-               ├─ push.example.com      → 网关终结 TLS → 回环地址上的 AnyTLS（sing-box）
+               ├─ edge.example.com      → 网关终结 TLS → 回环地址上的 AnyTLS（sing-box）
                ├─ www.microsoft.com     → 原样透传 → 回环地址上的 VLESS + Reality（sing-box，自己握手）
                └─ 其他 SNI / 非 TLS 流量 → 内部 HTTPS 网站（127.0.0.1:20000，附 PROXY protocol）
 
 公网 UDP/443 → 网关按 QUIC SNI 分流（解密 QUIC Initial 包取得 ClientHello）
-               ├─ web.example.com       → 回环地址上的 Hysteria2（sing-box，读取网关管理的证书）
+               ├─ data.example.com      → 回环地址上的 Hysteria2（sing-box，读取网关管理的证书）
                │                          └─ 认证失败的请求 → 伪装网站（反代内部网站）
-               ├─ assets.example.com    → 回环地址上的 TUIC（sing-box，读取网关管理的证书）
+               ├─ gw.example.com        → 回环地址上的 TUIC（sing-box，读取网关管理的证书）
                └─ 其他 SNI（如浏览器 HTTP/3）→ 内部网站的 HTTP/3（127.0.0.1:20000）
 
 公网 TCP/80  → HTTP 跳转 HTTPS / ACME HTTP-01 验证
