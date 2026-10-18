@@ -50,10 +50,17 @@ func main() {
 		fs.Usage()
 		os.Exit(2)
 	}
-	cmd, rest := args[0], args[1:]
-	// 允许把选项放在命令后面，例如 proxyd logs anytls -f
-	_ = fs.Parse(rest)
-	rest = fs.Args()
+	cmd := args[0]
+	// 允许把选项放在命令和参数后面，例如 proxyd logs anytls -f -n 100：
+	// flag 包遇到第一个非选项参数就停止，所以逐个取出参数后继续解析
+	var rest []string
+	for remaining := args[1:]; len(remaining) > 0; {
+		_ = fs.Parse(remaining)
+		if remaining = fs.Args(); len(remaining) > 0 {
+			rest = append(rest, remaining[0])
+			remaining = remaining[1:]
+		}
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
