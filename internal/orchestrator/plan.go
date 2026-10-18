@@ -18,8 +18,7 @@ import (
 )
 
 const (
-	unitPrefix   = "proxy-deploy-"
-	caddyUnit    = unitPrefix + "caddy.service"
+	gatewayUnit  = "proxy-gateway.service"
 	loopbackBase = 20000 // 内部网站和各协议后端从这里开始占用回环端口
 )
 
@@ -291,7 +290,7 @@ func (o *Orchestrator) Plan() *Plan {
 	}
 
 	for _, name := range certNames {
-		crt, key := caddy.CertPaths(o.layout.CaddyDataDir(), issuer, name)
+		crt, key := caddy.CertPaths(o.layout.GatewayDataDir(), issuer, name)
 		p.Certs = append(p.Certs, config.Certificate{Name: name, CertPath: crt, KeyPath: key})
 	}
 	for _, svc := range p.Services {
@@ -312,8 +311,8 @@ func (o *Orchestrator) Plan() *Plan {
 		tcp = append(tcp, *tcpServers[port])
 	}
 	p.Caddy = caddy.Spec{
-		AdminSocket:   o.layout.CaddyAdminSocket(),
-		StorageRoot:   o.layout.CaddyDataDir(),
+		AdminSocket:   o.layout.GatewayAdminSocket(),
+		StorageRoot:   o.layout.GatewayDataDir(),
 		UsageFile:     filepath.Join(o.layout.VarDir(), "usage.json"),
 		Users:         userPolicies(c),
 		Issuer:        issuer,

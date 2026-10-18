@@ -104,7 +104,7 @@ func TestPruneBinaries(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	write("caddy")
+	write("proxy-gateway")
 	write("versions/sing-box-1.14.3")
 	write("versions/sing-box-1.13.0")
 	write("versions/anytls-0.0.13")
@@ -112,7 +112,7 @@ func TestPruneBinaries(t *testing.T) {
 	link("anytls", "versions/anytls-0.0.13")
 	write("sing-box.tmp")
 
-	removed, err := PruneBinaries(bin, []string{filepath.Join(bin, "caddy"), filepath.Join(bin, "sing-box")})
+	removed, err := PruneBinaries(bin, []string{filepath.Join(bin, "proxy-gateway"), filepath.Join(bin, "sing-box")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestPruneBinaries(t *testing.T) {
 	if got := strings.Join(removed, ","); got != want {
 		t.Fatalf("removed:\n got %s\nwant %s", got, want)
 	}
-	for _, rel := range []string{"caddy", "sing-box", "versions/sing-box-1.14.3"} {
+	for _, rel := range []string{"proxy-gateway", "sing-box", "versions/sing-box-1.14.3"} {
 		if _, err := os.Stat(filepath.Join(bin, rel)); err != nil {
 			t.Fatalf("%s should be kept: %v", rel, err)
 		}

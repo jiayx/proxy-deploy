@@ -33,9 +33,9 @@ const backendTimeout = 3 * time.Minute
 
 // Deploy 按规划完成安装、配置和启动。可重复执行：已有部署会被更新为新的规划。
 //
-// systemd 只管理 Caddy；协议后端进程由 Caddy 中的网关启动和监管。配置没有变化的协议
-// 在 Caddy 重载配置后沿用原进程，连接不断。
-func (o *Orchestrator) Deploy(ctx context.Context, p *Plan, caddyBinary string, logf Logf) error {
+// systemd 只管理网关（proxy-gateway）；协议后端进程由网关启动和监管。配置没有变化的协议
+// 在网关重载配置后沿用原进程，连接不断。
+func (o *Orchestrator) Deploy(ctx context.Context, p *Plan, gatewayBinary string, logf Logf) error {
 	if len(p.Conflicts) > 0 {
 		return errors.New("规划存在冲突，未做任何变更")
 	}
@@ -47,11 +47,11 @@ func (o *Orchestrator) Deploy(ctx context.Context, p *Plan, caddyBinary string, 
 		return err
 	}
 
-	logf("安装 Caddy（网关）")
-	// 之前用 --caddy-binary 安装的本地构建继续沿用；删掉它就换回发布版本
-	_, statErr := os.Stat(o.layout.CaddyBin())
-	keepLocal := caddyBinary == "" && prev != nil && prev.LocalCaddy && statErr == nil
-	caddyChanged, warning, err := caddy.Install(ctx, o.layout, caddyBinary, keepLocal)
+	logf("安装网关 proxy-gateway")
+	// 之前用 --gateway-binary 安装的本地构建继续沿用；删掉它就换回发布版本
+	_, statErr := os.Stat(o.layout.GatewayBin())
+	keepLocal := gatewayBinary == "" && prev != nil && prev.LocalGateway && statErr == nil
+	gatewayChanged, warning, err := caddy.Install(ctx, o.layout, gatewayBinary, keepLocal)
 	if err != nil {
 		return err
 	}
@@ -65,8 +65,8 @@ func (o *Orchestrator) Deploy(ctx context.Context, p *Plan, caddyBinary string, 
 		}
 	}
 
-	// 协议配置先校验再写入；正在运行的旧进程直到 Caddy 重载后才会被替换
-	usedBins := []string{o.layout.CaddyBin()}
+	// 协议配置先校验再写入；正在运行的旧进程直到网关重载后才会被替换
+	usedBins := []string{o.layout.GatewayBin()}
 	p.Caddy.Backends = nil
 	for _, s := range p.Services {
 		b, err := o.writeProtocolConfig(ctx, s)
@@ -76,13 +76,13 @@ func (o *Orchestrator) Deploy(ctx context.Context, p *Plan, caddyBinary string, 
 		p.Caddy.Backends = append(p.Caddy.Backends, *b)
 		usedBins = append(usedBins, b.Command[0])
 	}
-	if err := o.writeCaddyConfig(ctx, p); err != nil {
+	if err := o.writeGatewayConfig(ctx, p); err != nil {
 		return err
 	}
 
-	unit := o.caddyUnit()
-	m := &Manifest{Prefix: o.layout.Prefix, User: o.layout.User, Services: []string{caddyUnit}, Units: []string{unit.Name}, Ports: p.Ports,
-		LocalCaddy: caddyBinary != "" || keepLocal}
+	unit := o.gatewayUnit()
+	m := &Manifest{Prefix: o.layout.Prefix, User: o.layout.User, Services: []string{gatewayUnit}, Units: []string{unit.Name}, Ports: p.Ports,
+		LocalGateway: gatewayBinary != "" || keepLocal}
 	for _, c := range p.Certs {
 		m.Certs = append(m.Certs, CertFile{c.Name, c.CertPath})
 	}
@@ -100,11 +100,11 @@ func (o *Orchestrator) Deploy(ctx context.Context, p *Plan, caddyBinary string, 
 			}
 		}
 	}
-	// Caddy 的 unit 或二进制变化后 reload 不会生效，需要重启
-	restartCaddy := caddyChanged
+	// 网关的 unit 或二进制变化后 reload 不会生效，需要重启
+	restartGateway := gatewayChanged
 	unitPath := o.layout.UnitPath(unit.Name)
 	if old, err := os.ReadFile(unitPath); err != nil || string(old) != unit.Content {
-		restartCaddy = true
+		restartGateway = true
 	}
 	if err := system.WriteFile(unitPath, []byte(unit.Content), 0644); err != nil {
 		return err
@@ -116,22 +116,22 @@ func (o *Orchestrator) Deploy(ctx context.Context, p *Plan, caddyBinary string, 
 	if err := o.systemd.DaemonReload(ctx); err != nil {
 		return err
 	}
-	if err := o.systemd.Enable(ctx, caddyUnit); err != nil {
+	if err := o.systemd.Enable(ctx, gatewayUnit); err != nil {
 		return err
 	}
 
 	start := o.systemd.ReloadOrRestart
 	switch {
-	case o.systemd.ActiveState(ctx, caddyUnit) != "active":
-		logf("启动 %s", caddyUnit)
-	case restartCaddy:
-		logf("重启 %s（程序或 unit 有变化，现有连接会断开）", caddyUnit)
+	case o.systemd.ActiveState(ctx, gatewayUnit) != "active":
+		logf("启动 %s", gatewayUnit)
+	case restartGateway:
+		logf("重启 %s（程序或 unit 有变化，现有连接会断开）", gatewayUnit)
 		start = o.systemd.Restart
 	default:
-		logf("重载 %s 的配置（现有连接不受影响）", caddyUnit)
+		logf("重载 %s 的配置（现有连接不受影响）", gatewayUnit)
 	}
-	if err := start(ctx, caddyUnit); err != nil {
-		return o.withJournal(ctx, caddyUnit, err)
+	if err := start(ctx, gatewayUnit); err != nil {
+		return o.withJournal(ctx, gatewayUnit, err)
 	}
 	if err := o.waitBackends(ctx, m.Backends, logf); err != nil {
 		return err
@@ -276,7 +276,7 @@ func (o *Orchestrator) preflight(p *Plan, prev *Manifest) error {
 	return nil
 }
 
-func (o *Orchestrator) writeCaddyConfig(ctx context.Context, p *Plan) error {
+func (o *Orchestrator) writeGatewayConfig(ctx context.Context, p *Plan) error {
 	for _, site := range p.Caddy.Sites {
 		if site.Upstream == "" && site.Root == o.layout.WWWDir() {
 			if err := ensureDefaultSite(site.Root); err != nil {
@@ -284,7 +284,7 @@ func (o *Orchestrator) writeCaddyConfig(ctx context.Context, p *Plan) error {
 			}
 		}
 	}
-	if err := os.MkdirAll(o.layout.CaddyDataDir(), 0700); err != nil {
+	if err := os.MkdirAll(o.layout.GatewayDataDir(), 0700); err != nil {
 		return err
 	}
 	data, err := caddy.Generate(p.Caddy)
@@ -292,11 +292,11 @@ func (o *Orchestrator) writeCaddyConfig(ctx context.Context, p *Plan) error {
 		return err
 	}
 	// 配置里可能包含 DNS API 凭据
-	return system.WriteFileChecked(o.layout.CaddyConfig(), data, 0600, func(path string) error {
-		cmd := exec.CommandContext(ctx, o.layout.CaddyBin(), "validate", "--config", path)
-		cmd.Env = append(os.Environ(), o.caddyEnv()...)
+	return system.WriteFileChecked(o.layout.GatewayConfig(), data, 0600, func(path string) error {
+		cmd := exec.CommandContext(ctx, o.layout.GatewayBin(), "validate", "--config", path)
+		cmd.Env = append(os.Environ(), o.gatewayEnv()...)
 		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("caddy validate: %s: %w", lastLines(string(out), 10), err)
+			return fmt.Errorf("proxy-gateway validate: %s: %w", lastLines(string(out), 10), err)
 		}
 		return nil
 	})
@@ -351,7 +351,7 @@ func (o *Orchestrator) waitBackends(ctx context.Context, names []string, logf Lo
 			if err != nil {
 				fmt.Fprintf(&b, "\n读取网关状态失败：%v", err)
 			}
-			return o.withJournal(ctx, caddyUnit, errors.New(b.String()))
+			return o.withJournal(ctx, gatewayUnit, errors.New(b.String()))
 		}
 		select {
 		case <-ctx.Done():

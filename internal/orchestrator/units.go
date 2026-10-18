@@ -18,20 +18,20 @@ func (o *Orchestrator) wantedBy() string {
 	return "multi-user.target"
 }
 
-// caddyEnv 让 Caddy 的全部运行时文件都落在安装目录下
-func (o *Orchestrator) caddyEnv() []string {
+// gatewayEnv 让网关（Caddy）的全部运行时文件都落在安装目录下
+func (o *Orchestrator) gatewayEnv() []string {
 	v := o.layout.VarDir()
 	return []string{"XDG_DATA_HOME=" + v + "/xdg/data", "XDG_CONFIG_HOME=" + v + "/xdg/config"}
 }
 
-func (o *Orchestrator) caddyUnit() unitFile {
-	bin, cfg := o.layout.CaddyBin(), o.layout.CaddyConfig()
+func (o *Orchestrator) gatewayUnit() unitFile {
+	bin, cfg := o.layout.GatewayBin(), o.layout.GatewayConfig()
 	var b strings.Builder
-	fmt.Fprintf(&b, "[Unit]\nDescription=proxy-deploy (Caddy + gateway + protocol backends)\nAfter=network-online.target\nWants=network-online.target\n\n")
+	fmt.Fprintf(&b, "[Unit]\nDescription=proxy-gateway (proxy-deploy entry gateway, website and protocol backends)\nAfter=network-online.target\nWants=network-online.target\n\n")
 	fmt.Fprintf(&b, "[Service]\nType=notify\n")
 	fmt.Fprintf(&b, "ExecStart=%s\n", execLine([]string{bin, "run", "--config", cfg}))
-	fmt.Fprintf(&b, "ExecReload=%s\n", execLine([]string{bin, "reload", "--config", cfg, "--address", "unix/" + o.layout.CaddyAdminSocket()}))
-	for _, e := range o.caddyEnv() {
+	fmt.Fprintf(&b, "ExecReload=%s\n", execLine([]string{bin, "reload", "--config", cfg, "--address", "unix/" + o.layout.GatewayAdminSocket()}))
+	for _, e := range o.gatewayEnv() {
 		fmt.Fprintf(&b, "Environment=%s\n", quoteArg(e))
 	}
 	b.WriteString("Restart=on-failure\nRestartSec=5\nTimeoutStopSec=10\n")
@@ -39,7 +39,7 @@ func (o *Orchestrator) caddyUnit() unitFile {
 		b.WriteString("LimitNOFILE=1048576\n")
 	}
 	fmt.Fprintf(&b, "\n[Install]\nWantedBy=%s\n", o.wantedBy())
-	return unitFile{caddyUnit, b.String()}
+	return unitFile{gatewayUnit, b.String()}
 }
 
 // execLine 把参数拼成 ExecStart 行：转义 systemd 的 % 说明符和 $ 变量，按需加引号

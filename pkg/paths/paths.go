@@ -41,10 +41,14 @@ func (l *Layout) VarDir() string       { return filepath.Join(l.Prefix, "var") }
 func (l *Layout) WWWDir() string       { return filepath.Join(l.Prefix, "www") }
 func (l *Layout) ManifestPath() string { return filepath.Join(l.Prefix, "manifest.json") }
 
-func (l *Layout) CaddyBin() string         { return filepath.Join(l.BinDir(), "caddy") }
-func (l *Layout) CaddyConfig() string      { return filepath.Join(l.EtcDir(), "caddy", "config.json") }
-func (l *Layout) CaddyDataDir() string     { return filepath.Join(l.VarDir(), "caddy") }
-func (l *Layout) CaddyAdminSocket() string { return filepath.Join(l.VarDir(), "caddy-admin.sock") }
+func (l *Layout) GatewayBin() string { return filepath.Join(l.BinDir(), "proxy-gateway") }
+func (l *Layout) GatewayConfig() string {
+	return filepath.Join(l.EtcDir(), "proxy-gateway", "config.json")
+}
+func (l *Layout) GatewayDataDir() string { return filepath.Join(l.VarDir(), "proxy-gateway") }
+func (l *Layout) GatewayAdminSocket() string {
+	return filepath.Join(l.VarDir(), "proxy-gateway-admin.sock")
+}
 
 func (l *Layout) ProtocolBin(name string) string { return filepath.Join(l.BinDir(), name) }
 

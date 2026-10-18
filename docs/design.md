@@ -12,7 +12,7 @@
 ## 架构
 
 ```text
-                    ┌─────────────────────── Caddy（自行构建）────────────────────────┐
+                    ┌──────────── proxy-gateway（Caddy + 网关模块，自行构建）─────────────┐
 公网 TCP/443  ───▶  │ proxy_gateway 应用（本仓库 gateway/）                            │
 公网 UDP/443  ───▶  │   ├─ 解析 TLS ClientHello / QUIC Initial，取得 SNI、ALPN         │
                     │   ├─ 协议路由：终结 TLS（证书来自 Caddy tls 应用）→ 回环后端      │
@@ -27,9 +27,9 @@
 ```
 
 - **网关**：以 Caddy 应用模块的形式实现（`gateway/`），不依赖 caddy-l4。我们需要的四层功能很少（按 SNI 路由、终结或透传 TLS、TCP/UDP 转发），自己实现后可以按需扩展，统计也能直接放在转发路径里做。
-- **Caddy 构建**：`cmd/caddy` 是一个导入官方标准模块和 `gateway` 的 Caddy 入口，依赖版本由本仓库 `go.mod` 固定，用 `go build` 直接构建，不需要 xcaddy。
+- **网关程序 proxy-gateway**：`cmd/proxy-gateway` 是一个导入官方 Caddy 标准模块和 `gateway` 的 Caddy 入口，依赖版本由本仓库 `go.mod` 固定，用 `go build` 直接构建，不需要 xcaddy。程序文件、systemd 服务和预构建发布都叫 proxy-gateway；Caddy 内部的模块名是 `proxy_gateway`。
 - **协议后端**：sing-box，每个协议一个独立进程。改动或重启一个协议不影响其他协议；某个协议出问题也不会把网关和网站带挂。
-- **`proxyd`**：负责安装二进制、根据 `deploy.yaml` 生成 Caddy 和 sing-box 配置、管理唯一的 systemd unit（Caddy）。sing-box 进程由网关监管，`proxyd` 的运维命令（状态、日志、重启）通过 Caddy 管理接口完成。
+- **`proxyd`**：负责安装二进制、根据 `deploy.yaml` 生成 Caddy 和 sing-box 配置、管理唯一的 systemd 服务 `proxy-gateway.service`。sing-box 进程由网关监管，`proxyd` 的运维命令（状态、日志、重启）通过网关的管理接口（Caddy admin API）完成。
 
 ## 网关配置（JSON）
 
@@ -105,7 +105,7 @@
 
 1. **TCP 网关**（已完成）：ClientHello 解析、终结与透传、PROXY protocol、统计与管理接口；Caddy 改为本仓库构建，去掉 caddy-l4。
 2. **UDP 网关**（已完成）：QUIC Initial 解密与 ClientHello 重组（v1/v2，跨包、乱序），按客户端地址维护会话并转发，Linux 上用 GRO/GSO 成批转发回包；主域名的 HTTP/3 由 Caddy 网站直接提供，Hysteria2 退到网关后面。以后支持 Hysteria2 混淆时，启用混淆的协议作为例外独占端口（混淆后的数据报无法识别 SNI）。
-3. **sing-box 进程监管**（已完成）：由网关启动并监管 sing-box，Caddy 重载配置时保留没有变化的协议进程；systemd 只剩 Caddy 一个服务。
+3. **sing-box 进程监管**（已完成）：由网关启动并监管 sing-box，Caddy 重载配置时保留没有变化的协议进程；systemd 只剩网关一个服务。
 4. **管理与配置**：Caddyfile 支持、管理接口（状态、用户）、`proxyd` 退化成安装器。
 5. **其他**：接入已有 Web 服务器（非代理流量透传给现有 nginx / Caddy）、WARP 等出口。
 

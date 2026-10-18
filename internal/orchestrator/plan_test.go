@@ -67,7 +67,7 @@ func TestPlanDefault(t *testing.T) {
 		t.Fatalf("unexpected hysteria2 plan: %+v %+v", hy, hy.Runtime)
 	}
 	if byName["anytls"].Runtime.Cert != nil {
-		t.Fatal("anytls TLS is terminated by Caddy and should not get a certificate")
+		t.Fatal("anytls TLS is terminated by the gateway and should not get a certificate")
 	}
 
 	var certs []string

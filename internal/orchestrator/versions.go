@@ -15,16 +15,16 @@ import (
 // repoAPI 是本仓库的 GitHub API 地址，用来查看 main 分支的最新提交
 const repoAPI = "https://api.github.com/repos/jiayx/proxy-deploy"
 
-// Versions 是 proxyd、Caddy、sing-box 的当前版本和可用的新版本；
+// Versions 是 proxyd、网关（proxy-gateway）、sing-box 的当前版本和可用的新版本；
 // 每一项单独查询，失败时记在对应的 Err 字段，不影响其他项
 type Versions struct {
 	Proxyd, Main             caddy.Build // proxyd 自身的构建、仓库 main 分支的最新提交
 	ProxydErr, MainErr       error
-	Caddy, CaddyRelease      *caddy.Build // 已安装的、最新发布的
-	CaddyErr, ReleaseErr     error
+	Gateway, GatewayRelease  *caddy.Build // 已安装的、最新发布的网关
+	GatewayErr, ReleaseErr   error
 	SingBox, SingBoxLatest   string // 已安装的、上游最新的正式版本
 	SingBoxErr, SingBoxUpErr error
-	LocalCaddy               bool // Caddy 是 --caddy-binary 安装的本地构建，deploy 不会自动更新
+	LocalGateway             bool // 网关是 --gateway-binary 安装的本地构建，deploy 不会自动更新
 }
 
 // SingBoxPinned 是 proxyd 安装的 sing-box 版本
@@ -35,11 +35,11 @@ func (o *Orchestrator) Versions(ctx context.Context) *Versions {
 	v := &Versions{}
 	v.Proxyd, v.ProxydErr = selfBuild()
 	v.Main, v.MainErr = latestMain(ctx)
-	v.Caddy, v.CaddyErr = caddy.InstalledBuild(ctx, o.layout)
+	v.Gateway, v.GatewayErr = caddy.InstalledBuild(ctx, o.layout)
 	if m, err := LoadManifest(o.layout); err == nil {
-		v.LocalCaddy = m.LocalCaddy
+		v.LocalGateway = m.LocalGateway
 	}
-	v.CaddyRelease, v.ReleaseErr = caddy.ReleaseBuild(ctx)
+	v.GatewayRelease, v.ReleaseErr = caddy.ReleaseBuild(ctx)
 	v.SingBox, v.SingBoxErr = singbox.InstalledVersion(ctx, o.layout)
 	v.SingBoxLatest, v.SingBoxUpErr = singbox.LatestVersion(ctx)
 	return v

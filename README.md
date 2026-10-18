@@ -1,6 +1,15 @@
 # proxy-deploy
 
-`proxyd` 是一个面向 Linux / systemd 的代理服务部署编排 CLI。它把 Caddy（含本仓库实现的入口网关 `proxy_gateway`）、代理协议服务和网站组合成一套部署：根据 YAML 配置规划公网入口、管理证书、安装二进制、生成配置和唯一的 systemd 服务（Caddy，协议后端由其中的网关监管），并提供状态、日志、重启和卸载命令。
+`proxyd` 是一个面向 Linux / systemd 的代理服务部署编排 CLI。它把网关、代理协议服务和网站组合成一套部署：根据 YAML 配置规划公网入口、管理证书、安装二进制、生成配置和唯一的 systemd 服务，并提供状态、日志、重启和卸载命令。
+
+名称约定：
+
+| 名称 | 是什么 |
+| --- | --- |
+| `proxy-deploy` | 本项目（仓库名、Go 模块名），也是默认安装目录名（`/opt/proxy-deploy`、`~/.local/proxy-deploy`） |
+| `proxyd` | 部署和运维用的命令行工具，在你自己的机器或服务器上运行 |
+| `proxy-gateway` | 服务器上实际运行的网关程序：官方 Caddy 的标准模块加上本仓库的网关模块 `proxy_gateway`，由本仓库构建（不是官方原版 Caddy）。它接收全部公网流量，提供网站、管理证书，并启动和监管协议后端。程序文件、systemd 服务（`proxy-gateway.service`）、预构建发布和 `proxyd logs gateway` 等命令都用这个名字 |
+| `proxy_gateway` | 网关在 Caddy 内部的模块名和管理接口路径（`/proxy_gateway/...`）；Caddy 模块名只能用下划线 |
 
 当前支持 **AnyTLS**、**VLESS + Reality**（TCP，经网关）、**Hysteria2**、**TUIC v5**（QUIC，经网关）和 **Shadowsocks 2022**（TCP+UDP，经网关的专用端口），服务端均由 sing-box 提供；网站支持静态文件和反向代理。支持系统级部署和 `--user` 用户级部署。
 
@@ -15,9 +24,9 @@
                └─ 其他 SNI / 非 TLS 流量 → 内部 HTTPS 网站（127.0.0.1:20000，附 PROXY protocol）
 
 公网 UDP/443 → 网关按 QUIC SNI 分流（解密 QUIC Initial 包取得 ClientHello）
-               ├─ hysteria2.example.com → 回环地址上的 Hysteria2（sing-box，读取 Caddy 管理的证书）
+               ├─ hysteria2.example.com → 回环地址上的 Hysteria2（sing-box，读取网关管理的证书）
                │                          └─ 认证失败的请求 → 伪装网站（反代内部网站）
-               ├─ tuic.example.com      → 回环地址上的 TUIC（sing-box，读取 Caddy 管理的证书）
+               ├─ tuic.example.com      → 回环地址上的 TUIC（sing-box，读取网关管理的证书）
                └─ 其他 SNI（如浏览器 HTTP/3）→ 内部网站的 HTTP/3（127.0.0.1:20000）
 
 公网 TCP/80  → HTTP 跳转 HTTPS / ACME HTTP-01 验证
@@ -28,12 +37,12 @@
 - 所有公网流量先进入网关，由网关决定交给网站还是代理协议，协议后端只监听回环地址；设计见 [docs/design.md](docs/design.md)。TCP 协议的客户端 TLS 由网关用统一管理的证书终结；QUIC 协议的数据报原样转发，由后端终结。多个协议可以共享同一个 TCP 或 UDP 端口，按 SNI 区分。
 - 主入口端口总是开启 UDP 网关：内部网站因此提供 HTTP/3，TCP 网站通过 `Alt-Svc` 通告对外端口。需要放行 UDP/443。
 - 网关为每个连接（UDP 为每个会话）记录一条日志（客户端地址、SNI、路由、后端本地地址、字节数、时长），`status` 显示每条路由的活动连接、累计连接和流量。网关重载配置时不会断开已建立的 TCP 连接和 QUIC 会话。
-- 网关按用户统计流量：用户认证发生在 sing-box 内部，网关从它的日志中得知每个连接属于哪个用户（sing-box 日志中的来源端口就是网关连接后端用的本地端口），把连接流量计入该用户。`status` 显示每个用户的活动连接、累计连接和上下行流量；网关连接日志带 `user` 字段。统计按加密后的传输字节计算，会略多于实际内容；认证失败的连接不计入任何用户。用户流量每 30 秒及 Caddy 停止时写入 `<prefix>/var/usage.json`，重启后接着累计（`uninstall` 会一并删除）。
+- 网关按用户统计流量：用户认证发生在 sing-box 内部，网关从它的日志中得知每个连接属于哪个用户（sing-box 日志中的来源端口就是网关连接后端用的本地端口），把连接流量计入该用户。`status` 显示每个用户的活动连接、累计连接和上下行流量；网关连接日志带 `user` 字段。统计按加密后的传输字节计算，会略多于实际内容；认证失败的连接不计入任何用户。用户流量每 30 秒及网关停止时写入 `<prefix>/var/usage.json`，重启后接着累计（`uninstall` 会一并删除）。
 - 用户超过 `traffic_limit` 或过了 `expire` 后，网关断开他的全部活动连接；之后的新连接在认证完成、识别出用户时立即断开（不需要修改 sing-box 配置）。`status` 显示每个用户的状态、本周期用量 / 上限、到期日和限定的协议；修改上限或到期日后重新部署即可生效，已用流量不受影响。用量每秒结算一次，所以实际用量可能超出上限约 1 秒的传输量。
 - UDP 会话按客户端地址识别，空闲 2 分钟后清理。网关同时学习每个会话的 QUIC 连接 ID，客户端地址变化（NAT 重新映射、切换网络但沿用原 socket）后仍能找回原会话，连接不断；客户端主动迁移并换用新连接 ID 时需要重新连接。Linux 上网关用 UDP GRO/GSO 成批转发后端回包。
 - 内部网站以 HTTPS 监听 `127.0.0.1:20000`（供 TCP 入口转发，支持 HTTP/1.1 和 HTTP/2；入口通过 PROXY protocol 传递客户端地址，网站访问日志和反代后端的 `X-Forwarded-For` 都是真实 IP），同时以明文 HTTP 监听 `127.0.0.1:20001`（供协议伪装反代，保留原始 Host）；每个经网关转发的协议在适配器中声明固定的回环端口（Hysteria2 20002、AnyTLS 20003、VLESS + Reality 20004、TUIC 20005），测试保证互不重复；启用、停用、新增或删除其他协议都不会改变已有协议的端口，也就不会让它们重启。
 - 协议后端（sing-box）日志中的来源地址都是 `127.0.0.1`：sing-box 自 1.6 起不再支持 PROXY protocol。客户端真实地址记录在网关日志中，网关日志的 `upstream_local` 与 sing-box 日志中的来源端口一一对应。
-- Caddy 统一管理主域名、启用协议的 SNI 和网站 `host` 的证书。Hysteria2 启动前会等待证书文件就绪（最多 3 分钟），续期后 sing-box 自动重新加载证书文件，无需重启服务；AnyTLS 的客户端 TLS 在 Caddy 终结，无需读取证书文件。
+- 网关（用 Caddy 的证书管理）统一管理主域名、启用协议的 SNI 和网站 `host` 的证书。Hysteria2 启动前会等待证书文件就绪（最多 3 分钟），续期后 sing-box 自动重新加载证书文件，无需重启服务；AnyTLS 的客户端 TLS 在网关终结，无需读取证书文件。
 
 ## 构建与部署
 
@@ -53,9 +62,9 @@ go test ./...
 # 1. 生成带注释的配置（协议密码已随机生成），编辑域名和邮箱
 ./proxyd init-config > deploy.yaml
 
-# 2. 检查配置与入口规划；加 --show-caddy 可查看生成的 Caddy JSON
+# 2. 检查配置与入口规划；加 --show-config 可查看生成的网关配置（Caddy JSON）
 ./proxyd -c deploy.yaml plan
-./proxyd -c deploy.yaml --show-caddy plan
+./proxyd -c deploy.yaml --show-config plan
 
 # 3. 在 Linux 服务器上安装并启动服务
 sudo ./proxyd -c deploy.yaml deploy
@@ -67,9 +76,9 @@ sudo ./proxyd status
 ./proxyd -c deploy.yaml client-config
 ```
 
-`plan` 只做配置和路由规划，不写文件、不下载程序，也不探测实际端口占用。`deploy` 会检查监听端口、安装程序、生成并校验协议配置和 Caddy 配置、写入 unit 和安装清单，再启动（或重载）Caddy，等待网关把各协议后端启动并稳定运行。
+`plan` 只做配置和路由规划，不写文件、不下载程序，也不探测实际端口占用。`deploy` 会检查监听端口、安装程序、生成并校验协议配置和网关配置、写入 unit 和安装清单，再启动（或重载）网关，等待网关把各协议后端启动并稳定运行。
 
-修改 YAML 后重新执行 `deploy` 即可应用配置：Caddy 重载配置，配置没有变化的协议后端沿用原进程、连接不断，只有变化了的协议会重启。仅执行 `restart` 不会重新生成配置。
+修改 YAML 后重新执行 `deploy` 即可应用配置：网关重载配置，配置没有变化的协议后端沿用原进程、连接不断，只有变化了的协议会重启。仅执行 `restart` 不会重新生成配置。
 
 ## 配置
 
@@ -145,7 +154,7 @@ Shadowsocks 没有 TLS 握手，网关无法按 SNI 分流，所以 `ss2022` 独
 | `acme` | 自定义 ACME 服务，必须填写 `email` 和 `ca`（ACME directory URL） |
 | `internal` | 使用 Caddy 内部 CA，适合测试，无需 `email`；不会自动安装根证书到系统信任库，生成的客户端 URI 带 `insecure=1` |
 
-ACME 配置还支持 `dns_provider` 和 `dns_config`，分别指定 Caddy DNS provider 名称及其配置字段。使用 DNS 验证时，需在 `cmd/caddy/main.go` 中加入对应 DNS provider 模块的 import 后自行构建，再通过 `--caddy-binary` 部署；预构建的 Caddy 不含 DNS provider。
+ACME 配置还支持 `dns_provider` 和 `dns_config`，分别指定 Caddy DNS provider 名称及其配置字段。使用 DNS 验证时，需在 `cmd/proxy-gateway/main.go` 中加入对应 DNS provider 模块的 import 后自行构建，再通过 `--gateway-binary` 部署；预构建的 proxy-gateway 不含 DNS provider。
 
 ### 网站
 
@@ -175,9 +184,9 @@ web:
 | `deploy` | 安装、更新并启动服务，输出客户端 URI | 是 |
 | `client-config [用户]` | 根据当前 YAML 生成客户端 URI，按用户分组；指定用户时只输出该用户的 | 是 |
 | `status` | 查看已安装服务状态与证书有效期 | 否，读取安装清单 |
-| `version` | 查看 proxyd、Caddy、sing-box 的版本，检查是否有新版本（需要访问 GitHub） | 否 |
-| `logs <服务>` | `caddy` 查看整个服务的日志（含网关连接日志），协议名只看该协议后端的输出 | 否，读取安装清单 |
-| `restart [服务]` | 不指定或 `caddy` 时重启整个服务，指定协议名时只重启该协议的后端进程 | 否，读取安装清单 |
+| `version` | 查看 proxyd、网关、sing-box 的版本，检查是否有新版本（需要访问 GitHub） | 否 |
+| `logs <服务>` | `gateway` 查看整个服务的日志（含网关连接日志和全部后端输出），协议名只看该协议后端的输出 | 否，读取安装清单 |
+| `restart [服务]` | 不指定或 `gateway` 时重启整个服务，指定协议名时只重启该协议的后端进程 | 否，读取安装清单 |
 | `uninstall` | 停用并删除记录的 unit，删除整个安装目录 | 否，读取安装清单 |
 
 | 选项 | 默认值 / 用途 |
@@ -185,13 +194,13 @@ web:
 | `-c <路径>` | 配置路径，默认 `deploy.yaml` |
 | `--prefix <目录>` | 安装目录，系统模式默认 `/opt/proxy-deploy`，用户模式默认 `~/.local/proxy-deploy`；建议使用独立的绝对路径 |
 | `--user` | 使用 `systemctl --user` 和用户级 unit 目录 |
-| `--caddy-binary <路径>` | `deploy` 时复制并使用本地 Caddy 二进制，必须包含 `proxy_gateway` 模块（`go build ./cmd/caddy` 构建）；之后的部署沿用它，不自动换成发布版本 |
-| `--show-caddy` | `plan` 时额外输出生成的 Caddy JSON |
+| `--gateway-binary <路径>` | `deploy` 时复制并使用本地构建的网关（`go build ./cmd/proxy-gateway`），必须包含 `proxy_gateway` 模块；之后的部署沿用它，不自动换成发布版本 |
+| `--show-config` | `plan` 时额外输出生成的网关配置（Caddy JSON） |
 | `-n <行数>` / `-f` | 日志行数（默认 50）/ 持续跟随日志 |
 
 ```bash
 sudo ./proxyd -n 100 -f logs anytls
-sudo ./proxyd logs caddy
+sudo ./proxyd logs gateway
 sudo ./proxyd restart hysteria2
 sudo ./proxyd restart
 sudo ./proxyd uninstall
@@ -207,7 +216,7 @@ sudo ./proxyd uninstall
 ./proxyd --user -c deploy.yaml plan
 ./proxyd --user -c deploy.yaml deploy
 ./proxyd --user status
-./proxyd --user -f logs caddy
+./proxyd --user -f logs gateway
 ./proxyd --user uninstall
 ```
 
@@ -217,37 +226,37 @@ sudo ./proxyd uninstall
 
 ## 程序安装与文件布局
 
-部署使用的 Caddy 由本仓库的 `cmd/caddy` 构建：官方标准模块加上 `gateway/` 中的入口网关，Caddy 及依赖版本由 `go.mod` 固定，`go build ./cmd/caddy` 即可构建。安装后都会检查网关模块：
+网关程序 proxy-gateway 由本仓库的 `cmd/proxy-gateway` 构建：官方 Caddy 的标准模块加上 `gateway/` 中的网关模块，Caddy 及依赖版本由 `go.mod` 固定，`go build ./cmd/proxy-gateway` 即可构建。它安装为 `<prefix>/bin/proxy-gateway`，不会放进 PATH，也不会动系统里已有的 Caddy。安装后都会检查网关模块：
 
-- 默认使用本项目 GitHub Releases 中 `caddy` release 的 `caddy-gateway-<os>-<arch>` 预构建文件，用同时发布的 `.sha256` 文件校验。该 release 由 `.github/workflows/caddy.yml` 在网关代码或依赖变化时构建 linux amd64 / arm64。每次 `deploy` 都会比较校验和：发布版本更新后自动下载替换并重启 Caddy（重启会断开现有连接）；暂时无法访问 GitHub 时沿用已安装的版本并给出警告。
-- `--caddy-binary` 指定的本地构建（例如加了 DNS provider）。安装清单会记住这一点，之后不带该选项的 `deploy` 也沿用它，不会换成发布版本；要换回发布版本，删除 `bin/caddy` 后重新部署。
+- 默认使用本项目 GitHub Releases 中 `proxy-gateway` release 的 `proxy-gateway-<os>-<arch>` 预构建文件，用同时发布的 `.sha256` 文件校验。该 release 由 `.github/workflows/proxy-gateway.yml` 在网关代码或依赖变化时构建 linux amd64 / arm64。每次 `deploy` 都会比较校验和：发布版本更新后自动下载替换 `<prefix>/bin/proxy-gateway` 并重启网关（重启会断开现有连接）；暂时无法访问 GitHub 时沿用已安装的版本并给出警告。
+- `--gateway-binary` 指定的本地构建（例如加了 DNS provider）。安装清单会记住这一点，之后不带该选项的 `deploy` 也沿用它，不会换成发布版本；要换回发布版本，删除 `bin/proxy-gateway` 后重新部署。
 
-`proxyd version` 显示 proxyd、Caddy、sing-box 的当前版本，并检查是否有新版本：proxyd 与仓库 `main` 分支比较，Caddy 与最新发布的预构建版本比较（release 中的 `caddy-gateway.revision` 记录了构建所用的提交），sing-box 与上游最新正式版比较。sing-box 的版本固定在 proxyd 中，上游发布新版本后需要更新 proxyd 才会升级。
+`proxyd version` 显示 proxyd、网关、sing-box 的当前版本，并检查是否有新版本：proxyd 与仓库 `main` 分支比较，网关与最新发布的预构建版本比较（release 中的 `proxy-gateway.revision` 记录了构建所用的提交），sing-box 与上游最新正式版比较。sing-box 的版本固定在 proxyd 中，上游发布新版本后需要更新 proxyd 才会升级。
 
 协议程序从各自上游 GitHub Releases 下载，版本和各平台的 sha256 固定在适配器源码中（当前 sing-box `1.14.3`，支持 linux amd64 / arm64），校验不通过不会写入文件。所有协议都使用 sing-box 作为服务端：共用一份二进制，每个协议运行一个独立进程，修改或重启某个协议不影响其他协议的连接。程序按版本保存并通过符号链接使用；重复部署会复用已存在的版本，部署成功后清理 `bin/` 中不再使用的程序和版本；更新配置不会自动追踪上游最新版本。部署主机需能访问相应下载地址。
 
 ```text
 <prefix>/
-├── bin/                   # Caddy、协议程序链接及 versions/ 下的版本文件
+├── bin/                   # proxy-gateway、协议程序链接及 versions/ 下的版本文件
 ├── etc/
-│   ├── caddy/config.json  # 生成的 Caddy 配置
+│   ├── proxy-gateway/config.json  # 生成的网关配置（Caddy JSON）
 │   ├── hysteria2/config.json # sing-box 配置
 │   └── anytls/config.json
 ├── var/
-│   ├── caddy/             # Caddy 证书、私钥及 CA 数据
-│   ├── caddy-admin.sock   # Caddy 管理接口 Unix socket
-│   └── xdg/               # Caddy 其他运行时数据
+│   ├── proxy-gateway/     # 网关的证书、私钥及 CA 数据
+│   ├── proxy-gateway-admin.sock  # 网关管理接口（Caddy admin API）Unix socket
+│   └── xdg/               # 网关其他运行时数据
 ├── www/                   # 默认网站
 └── manifest.json          # unit、协议后端、端口及证书路径的安装清单
 ```
 
-生成的 Caddy 配置和协议配置（含密码）权限为 `0600`。`deploy.yaml` 由使用者保存，不会自动复制到安装目录。
+生成的网关配置和协议配置（含密码）权限为 `0600`。`deploy.yaml` 由使用者保存，不会自动复制到安装目录。
 
-systemd unit 在安装目录之外：系统模式写入 `/etc/systemd/system/`，用户模式写入 `$XDG_CONFIG_HOME/systemd/user/`（未设置时为 `~/.config/systemd/user/`）。只有一个服务 `proxy-deploy-caddy.service`。协议后端（sing-box）由 Caddy 中的网关作为子进程启动和监管：
+systemd unit 在安装目录之外：系统模式写入 `/etc/systemd/system/`，用户模式写入 `$XDG_CONFIG_HOME/systemd/user/`（未设置时为 `~/.config/systemd/user/`）。只有一个服务 `proxy-gateway.service`。协议后端（sing-box）由网关作为子进程启动和监管：
 
 - 进程退出后自动重启，重启间隔逐步加长（最长 10 秒）；依赖证书的协议等证书文件出现后才启动。
-- 子进程输出按行写入 Caddy 的日志（带 `backend` 字段），`proxyd logs <协议名>` 只显示该协议的输出。
-- Caddy 重载配置时，命令和配置都没变的后端沿用原进程；Caddy 停止或异常退出时子进程随之退出。
+- 子进程输出按行写入网关的日志（带 `backend` 字段），`proxyd logs <协议名>` 只显示该协议的输出。
+- 网关重载配置时，命令和配置都没变的后端沿用原进程；网关停止或异常退出时子进程随之退出。
 - `status` 显示每个后端的状态、PID、运行时长和重启次数；部署时后端没能就绪会显示它最近的输出。
 
 `uninstall` 根据清单清理 unit，并递归删除整个 `<prefix>`，包括证书和默认网站；自定义前缀应专用于此部署。外部网站目录及存放在前缀之外的 YAML 和 CLI 二进制不由卸载命令删除。unit 名称固定，使用不同前缀不代表能在同一个 systemd 实例中同时运行多套部署。
@@ -256,12 +265,12 @@ systemd unit 在安装目录之外：系统模式写入 `/etc/systemd/system/`�
 
 ```text
 cmd/proxyd/                CLI 命令、选项和输出
-cmd/caddy/                 部署用的 Caddy 入口（标准模块 + 网关）
+cmd/proxy-gateway/         网关程序入口（官方 Caddy 标准模块 + 网关模块）
 gateway/                   入口网关 proxy_gateway（Caddy 应用模块）：SNI 路由、TLS 终结与透传、统计和管理接口
 docs/design.md             设计目标、架构和实现计划
 internal/config/           YAML 类型、默认值、基础校验和示例
 internal/orchestrator/     入口规划、冲突检查、部署、清单和 systemd 管理
-internal/entry/caddy/      Caddy 安装、模块检查和 JSON 配置生成（含网关配置）
+internal/entry/caddy/      网关安装、版本检查和 Caddy JSON 配置生成
 internal/protocol/         协议接口、注册表及 anytls / hysteria2 适配器；singbox/ 为共用的 sing-box 安装与配置
 pkg/paths/                 安装前缀和系统 / 用户模式路径
 pkg/system/                下载、解压、版本安装、文件写入和 systemctl 封装

@@ -103,12 +103,12 @@ func (o *Orchestrator) Backends(ctx context.Context) ([]BackendStatus, error) {
 	return list, o.admin(ctx, http.MethodGet, "/proxy_gateway/backends", &list)
 }
 
-// admin 调用 Caddy 管理接口（unix socket），out 非空时解析 JSON 响应
+// admin 调用网关的管理接口（Caddy admin API，unix socket），out 非空时解析 JSON 响应
 func (o *Orchestrator) admin(ctx context.Context, method, path string, out any) error {
 	client := &http.Client{
 		Timeout: 5 * time.Second,
 		Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, "unix", o.layout.CaddyAdminSocket())
+			return (&net.Dialer{}).DialContext(ctx, "unix", o.layout.GatewayAdminSocket())
 		}},
 	}
 	req, err := http.NewRequestWithContext(ctx, method, "http://localhost"+path, nil)
@@ -146,22 +146,22 @@ func certNotAfter(path string) (time.Time, error) {
 	return cert.NotAfter, nil
 }
 
-// Logs 输出日志：caddy 为整个 Caddy 服务（含网关连接日志），协议名只输出该协议后端进程的日志
+// Logs 输出日志：gateway 为整个网关服务（含连接日志和全部后端输出），协议名只输出该协议后端进程的日志
 func (o *Orchestrator) Logs(ctx context.Context, name string, lines int, follow bool) error {
 	m, err := LoadManifest(o.layout)
 	if err != nil {
 		return err
 	}
-	if name == "caddy" || name == caddyUnit {
-		cmd := exec.CommandContext(ctx, "journalctl", o.journalArgs(caddyUnit, lines, follow)...)
+	if name == "gateway" || name == gatewayUnit {
+		cmd := exec.CommandContext(ctx, "journalctl", o.journalArgs(gatewayUnit, lines, follow)...)
 		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 		return cmd.Run()
 	}
 	if !slices.Contains(m.Backends, name) {
-		return fmt.Errorf("未知服务 %q，可选：caddy, %s", name, strings.Join(m.Backends, ", "))
+		return fmt.Errorf("未知服务 %q，可选：gateway, %s", name, strings.Join(m.Backends, ", "))
 	}
 
-	// 后端输出由网关写入 Caddy 的日志，带 "backend" 字段；从中筛出该后端的行
+	// 后端输出由网关写入自己的日志，带 "backend" 字段；从中筛出该后端的行
 	var recent []string
 	if err := o.scanJournal(ctx, false, func(line string) {
 		if l, ok := backendLine(line, name); ok {
@@ -186,13 +186,13 @@ func (o *Orchestrator) Logs(ctx context.Context, name string, lines int, follow 
 	})
 }
 
-// scanJournal 逐行读取 Caddy 的日志（只含消息本身）。follow 时只读新产生的日志并持续等待
+// scanJournal 逐行读取网关的日志（只含消息本身）。follow 时只读新产生的日志并持续等待
 func (o *Orchestrator) scanJournal(ctx context.Context, follow bool, fn func(string)) error {
 	var args []string
 	if o.layout.User {
 		args = append(args, "--user")
 	}
-	args = append(args, "-u", caddyUnit, "-o", "cat", "--no-pager")
+	args = append(args, "-u", gatewayUnit, "-o", "cat", "--no-pager")
 	if follow {
 		args = append(args, "-f", "-n", "0")
 	} else {
@@ -215,7 +215,7 @@ func (o *Orchestrator) scanJournal(ctx context.Context, follow bool, fn func(str
 	return cmd.Wait()
 }
 
-// backendLine 解析 Caddy 的 JSON 日志行，属于该后端时返回 "时间 输出内容"
+// backendLine 解析网关的 JSON 日志行，属于该后端时返回 "时间 输出内容"
 func backendLine(line, backend string) (string, bool) {
 	if !strings.Contains(line, `"backend":"`+backend+`"`) {
 		return "", false
@@ -232,20 +232,20 @@ func backendLine(line, backend string) (string, bool) {
 	return ts + "  " + entry.Msg, true
 }
 
-// Restart 重启服务：不指定或 caddy 时重启整个 Caddy（含全部协议后端），指定协议名时只重启该协议的后端进程
+// Restart 重启服务：不指定或 gateway 时重启整个网关（含全部协议后端），指定协议名时只重启该协议的后端进程
 func (o *Orchestrator) Restart(ctx context.Context, name string) error {
 	m, err := LoadManifest(o.layout)
 	if err != nil {
 		return err
 	}
-	if name == "" || name == "caddy" || name == caddyUnit {
-		if err := o.systemd.Restart(ctx, caddyUnit); err != nil {
-			return o.withJournal(ctx, caddyUnit, err)
+	if name == "" || name == "gateway" || name == gatewayUnit {
+		if err := o.systemd.Restart(ctx, gatewayUnit); err != nil {
+			return o.withJournal(ctx, gatewayUnit, err)
 		}
 		return o.waitBackends(ctx, m.Backends, func(string, ...any) {})
 	}
 	if !slices.Contains(m.Backends, name) {
-		return fmt.Errorf("未知服务 %q，可选：caddy, %s", name, strings.Join(m.Backends, ", "))
+		return fmt.Errorf("未知服务 %q，可选：gateway, %s", name, strings.Join(m.Backends, ", "))
 	}
 	if err := o.admin(ctx, http.MethodPost, "/proxy_gateway/backends/"+name+"/restart", nil); err != nil {
 		return err

@@ -25,8 +25,8 @@ const usage = `用法: proxyd [选项] <命令>
   deploy           安装并启动全部服务（可重复执行以更新）
   client-config [用户]  输出客户端连接 URI（默认全部用户）
   status           查看服务状态和证书有效期
-  version          查看 proxyd、Caddy、sing-box 的版本，检查是否有新版本
-  logs <服务>      查看日志（caddy 或协议名）
+  version          查看 proxyd、网关、sing-box 的版本，检查是否有新版本
+  logs <服务>      查看日志（gateway 或协议名）
   restart [服务]   重启全部或指定服务
   uninstall        停止并删除全部服务和安装目录
 
@@ -38,8 +38,8 @@ func main() {
 	cfgPath := fs.String("c", "deploy.yaml", "配置文件路径")
 	prefix := fs.String("prefix", "", "安装目录（默认 /opt/proxy-deploy，--user 时 ~/.local/proxy-deploy）")
 	user := fs.Bool("user", false, "rootless 模式：使用 systemd --user，无需 root（只能使用 1024 以上端口）")
-	caddyBin := fs.String("caddy-binary", "", "使用本地构建的 caddy（go build ./cmd/caddy）代替发布的预构建版本")
-	showCaddy := fs.Bool("show-caddy", false, "plan 时输出生成的 Caddy 配置")
+	gatewayBin := fs.String("gateway-binary", "", "使用本地构建的网关（go build ./cmd/proxy-gateway）代替发布的预构建版本")
+	showConfig := fs.Bool("show-config", false, "plan 时输出生成的网关配置（Caddy JSON）")
 	lines := fs.Int("n", 50, "logs 显示的行数")
 	follow := fs.Bool("f", false, "logs 持续输出")
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage); fs.PrintDefaults() }
@@ -59,14 +59,14 @@ func main() {
 	defer stop()
 
 	layout := paths.New(*prefix, *user)
-	if err := run(ctx, cmd, rest, layout, *cfgPath, *caddyBin, *showCaddy, *lines, *follow); err != nil {
+	if err := run(ctx, cmd, rest, layout, *cfgPath, *gatewayBin, *showConfig, *lines, *follow); err != nil {
 		fmt.Fprintln(os.Stderr, "错误:", err)
 		os.Exit(1)
 	}
 }
 
 func run(ctx context.Context, cmd string, rest []string, layout *paths.Layout,
-	cfgPath, caddyBin string, showCaddy bool, lines int, follow bool) error {
+	cfgPath, gatewayBin string, showConfig bool, lines int, follow bool) error {
 
 	logf := func(format string, a ...any) { fmt.Printf("==> "+format+"\n", a...) }
 
@@ -144,7 +144,7 @@ func run(ctx context.Context, cmd string, rest []string, layout *paths.Layout,
 		return nil
 	case "logs":
 		if len(rest) == 0 {
-			return errors.New("用法: proxyd logs <caddy|协议名> [-n 行数] [-f]")
+			return errors.New("用法: proxyd logs <gateway|协议名> [-n 行数] [-f]")
 		}
 		return orchestrator.New(nil, nil, layout).Logs(ctx, rest[0], lines, follow)
 	case "restart":
@@ -172,12 +172,12 @@ func run(ctx context.Context, cmd string, rest []string, layout *paths.Layout,
 	switch cmd {
 	case "plan":
 		printPlan(plan)
-		if showCaddy {
+		if showConfig {
 			data, err := caddy.Generate(plan.Caddy)
 			if err != nil {
 				return err
 			}
-			fmt.Printf("\nCaddy 配置:\n%s\n", data)
+			fmt.Printf("\n网关配置（Caddy JSON）:\n%s\n", data)
 		}
 		if len(plan.Conflicts) > 0 {
 			return errors.New("规划存在冲突")
@@ -186,7 +186,7 @@ func run(ctx context.Context, cmd string, rest []string, layout *paths.Layout,
 	case "deploy":
 		printPlan(plan)
 		fmt.Println()
-		if err := orch.Deploy(ctx, plan, caddyBin, logf); err != nil {
+		if err := orch.Deploy(ctx, plan, gatewayBin, logf); err != nil {
 			return err
 		}
 		fmt.Println("\n部署完成。客户端配置:")
@@ -265,26 +265,26 @@ func printVersions(v *orchestrator.Versions) {
 		fmt.Printf("          ↑ 仓库 main 已更新到 %s，拉取后重新构建 proxyd\n", short(v.Main))
 	}
 
-	// Caddy：与发布的预构建版本比较，deploy 总是安装发布版本（除非指定 --caddy-binary）
-	if v.CaddyErr != nil {
-		fmt.Println("Caddy     未安装")
+	// 网关：与发布的预构建版本比较，deploy 总是安装发布版本（除非指定 --gateway-binary）
+	if v.GatewayErr != nil {
+		fmt.Println("网关      未安装")
 	} else {
-		fmt.Printf("Caddy     %s，网关 %s\n", v.Caddy.Caddy, short(*v.Caddy))
-		if v.LocalCaddy {
-			fmt.Println("          用 --caddy-binary 安装的本地构建，deploy 不会自动更新")
+		fmt.Printf("网关      proxy-gateway %s，基于 Caddy %s\n", short(*v.Gateway), v.Gateway.Caddy)
+		if v.LocalGateway {
+			fmt.Println("          用 --gateway-binary 安装的本地构建，deploy 不会自动更新")
 		}
 	}
 	switch {
 	case v.ReleaseErr != nil:
 		fmt.Printf("          无法检查发布版本：%v\n", v.ReleaseErr)
-	case v.CaddyErr != nil:
-		fmt.Printf("          发布版本 %s，deploy 时安装\n", short(*v.CaddyRelease))
-	case v.Caddy.Revision == v.CaddyRelease.Revision && !v.Caddy.Modified:
+	case v.GatewayErr != nil:
+		fmt.Printf("          发布版本 %s，deploy 时安装\n", short(*v.GatewayRelease))
+	case v.Gateway.Revision == v.GatewayRelease.Revision && !v.Gateway.Modified:
 		fmt.Println("          ✓ 与发布版本一致")
-	case v.Caddy.Modified || v.Caddy.Time.After(v.CaddyRelease.Time):
-		fmt.Printf("          本地构建；发布版本是 %s，不带 --caddy-binary 执行 deploy 会换成发布版本\n", short(*v.CaddyRelease))
+	case v.Gateway.Modified || v.Gateway.Time.After(v.GatewayRelease.Time):
+		fmt.Printf("          本地构建；发布版本是 %s\n", short(*v.GatewayRelease))
 	default:
-		fmt.Printf("          ↑ 发布版本已更新到 %s，执行 deploy 升级（Caddy 会重启）\n", short(*v.CaddyRelease))
+		fmt.Printf("          ↑ 发布版本已更新到 %s，执行 deploy 升级（网关会重启）\n", short(*v.GatewayRelease))
 	}
 
 	// sing-box：版本固定在 proxyd 中
