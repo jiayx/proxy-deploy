@@ -263,6 +263,20 @@ docker exec proxy-gateway proxy-gateway logs anytls         # 某个协议最近
 docker compose pull && docker compose up -d                 # 升级镜像（会断开现有连接）
 ```
 
+在宿主机上放一个同名脚本，就能像 systemd 部署一样直接执行 `proxy-gateway status`、`proxy-gateway deploy` 等命令：
+
+```bash
+cat > /usr/local/bin/proxy-gateway <<'EOF'
+#!/bin/sh
+# 把命令转给容器里的 proxy-gateway，例如 proxy-gateway status
+if [ -t 0 ] && [ -t 1 ]; then
+	exec docker exec -it proxy-gateway proxy-gateway "$@"
+fi
+exec docker exec -i proxy-gateway proxy-gateway "$@"
+EOF
+chmod 755 /usr/local/bin/proxy-gateway
+```
+
 - 挂载 `deploy.yaml` 所在的目录，不要只挂载这一个文件：编辑器和 `sed -i` 保存时会换成新文件，单文件挂载仍指向旧文件，容器里看不到修改。
 - 使用 host 网络时，要反向代理其他容器里的网站，把那个容器的端口映射到本机回环地址（例如 `ports: ["127.0.0.1:8080:80"]`），在 `web` 中写 `upstream: 127.0.0.1:8080`。
 - 静态网站目录需要另外挂载进容器，`root` 写容器内的路径。
