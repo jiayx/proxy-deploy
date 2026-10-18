@@ -8,7 +8,8 @@ import (
 )
 
 // 浏览器真实发出的 QUIC Initial 数据报（testdata/browser/*.bin，每个文件一个连接），
-// 由抓包提取：依次为 2 字节长度 + 数据报内容。覆盖 Chrome 打散 CRYPTO 帧等实际情况
+// 由抓包提取：依次为 2 字节长度 + 数据报内容。Chrome、Firefox 访问 huodong.taobao.com，
+// Safari（Apple 系统的 QUIC 实现）访问 cloudflare-quic.com；覆盖 Chrome 打散 CRYPTO 帧等实际情况
 func TestBrowserInitials(t *testing.T) {
 	files, _ := filepath.Glob("testdata/browser/*.bin")
 	if len(files) == 0 {
